@@ -1,94 +1,100 @@
 import streamlit as st
 import yfinance as yf
 
-st.set_page_config(page_title="Fair Value Aktienanalyse", page_icon="📈", layout="wide")
+st.set_page_config(page_title="Fair Value & Aktien-Score", layout="wide")
+st.title("📈 Automatische Fair-Value- & Aktien-Analyse")
 
-st.title("📈 Fair Value Aktienanalyse")
-st.caption("Prototyp – automatische Aktienanalyse mit anpassbaren Bewertungsannahmen")
+# Seitenleiste für Annahmen
+st.sidebar.header("⚙️ Bewertungsparameter")
+discount_rate = st.sidebar.number_input("Diskontsatz (%)", min_value=1.0, max_value=20.0, value=10.0, step=0.5) / 100.0
+terminal_growth = st.sidebar.number_input("Ewiges Wachstum (%)", min_value=0.0, max_value=5.0, value=2.0, step=0.1) / 100.0
+target_pe = st.sidebar.number_input("Ziel-KGV", min_value=5.0, max_value=50.0, value=15.0, step=1.0)
 
-ticker = st.text_input("Aktie / Ticker", "ALV.DE").upper().strip()
+# Hauptbereich: Ticker-Auswahl
+quick_select = st.selectbox("Schnellauswahl oder eigene Eingabe:", ["ALV.DE", "AAPL", "MSFT", "SIE.DE", "Manuell"])
 
-c1, c2, c3 = st.columns(3)
-with c1:
-    discount = st.number_input("Diskontsatz (%)", min_value=0.0, max_value=1.0, value=0.10, step=0.01, format="%.2f")
+if quick_select == "Manuell":
+    ticker_input = st.text_input("Gib Ticker oder ISIN ein:", "ALV.DE")
+else:
+    ticker_input = quick_select
 
-with c2:
-    terminal_growth = st.number_input("Langfristiges Wachstum", min_value=0.0, max_value=0.1, value=0.02, step=0.005, format="%.3f")
-with c3:
-    target_pe = st.number_input("Ziel-KGV", min_value=1.0, max_value=100.0, value=15.0, step=1.0, format="%.1f")
+ticker_symbol = ticker_input.upper().strip()
 
-if st.button("🔄 Aktie analysieren", type="primary"):
+if st.button("Aktie analysieren", type="primary"):
     try:
-        t = yf.Ticker(ticker)
-        info = t.info
+        ticker = yf.Ticker(ticker_symbol)
+        info = ticker.info
 
-        price = info.get("currentPrice") or info.get("regularMarketPrice")
-        eps = info.get("trailingEps")
-        shares = info.get("sharesOutstanding")
-        name = info.get("longName", ticker)
+        # Grunddaten & Währung
+        currency = info.get("currency", "EUR")
+        currency_symbol = "$" if currency == "USD" else "€" if currency == "EUR" else currency
+        
+        price = info.get("currentPrice") or info.get("regularMarketPrice", 0)
+        eps = info.get("trailingEps", 0) or 0
+        fcf = info.get("freeCashflow", 0) or 0
+        shares = info.get("sharesOutstanding", 1) or 1
+        
+        pe_ratio = info.get("trailingPE", 0) or 0
+        pb_ratio = info.get("priceToBook", 0) or 0
+        ev_ebitda = info.get("enterpriseToEbitda", 0) or 0
+        growth = info.get("earningsGrowth", 0.05) or 0.05
+        debt_to_equity = (info.get("debtToEquity", 100) or 100) / 100.0
 
-        if price is None or eps is None:
-            st.error("Für diesen Ticker konnten nicht genügend Daten abgerufen werden.")
+        if not price or price == 0:
+            st.error("Keine gültigen Kursdaten für diesen Ticker gefunden.")
             st.stop()
 
-        # Einfache 5-Jahres-EPS-Prognose als Prototyp.
-        growth_rates = [0.06, 0.05, 0.05, 0.04, 0.03]
-        eps_forecast = []
-        x = float(eps)
-        for g in growth_rates:
-            x *= 1 + g
-            eps_forecast.append(x)
+        fcf_per_share = fcf / shares if shares > 0 else 0
 
-        # EPS-basierter Terminalwert + abgezinste EPS
-        pv_eps = sum(e / (1 + discount)**(i+1) for i, e in enumerate(eps_forecast))
-        terminal_eps = eps_forecast[-1] * (1 + terminal_growth)
-        terminal_value = terminal_eps / (discount - terminal_growth)
-        pv_terminal = terminal_value / (1 + discount)**5
-        fair_eps_model = pv_eps + pv_terminal
+        # Fair-Value-Berechnungen
+        fv_kgv = eps * target_pe if eps > 0 else price
+        fv_fcf = fcf_per_share * target_pe if fcf_per_share > 0 else price
 
-        # KGV-Modell
-        fair_pe = eps_forecast[-1] * target_pe
-
-        # Gewichtung
-        fair_value = 0.6 * fair_eps_model + 0.4 * fair_pe
-        upside = fair_value / price - 1
-        margin_price = fair_value * 0.85
-
-        if price < margin_price:
-            verdict = "🟢 KAUFEN"
-        elif price < fair_value:
-            verdict = "🟡 BEOBACHTEN"
+        # DCF-Modell
+        if fcf_per_share > 0 and discount_rate > terminal_growth:
+            cashflows = [fcf_per_share * ((1 + growth) ** i) for i in range(1, 6)]
+            pv_cashflows = sum([cf / ((1 + discount_rate) ** i) for i, cf in enumerate(cashflows, 1)])
+            terminal_value = (cashflows[-1] * (1 + terminal_growth)) / (discount_rate - terminal_growth)
+            pv_terminal_value = terminal_value / ((1 + discount_rate) ** 5)
+            fv_dcf = pv_cashflows + pv_terminal_value
         else:
-            verdict = "🔴 ZU TEUER"
+            fv_dcf = price
 
-        st.subheader(name)
+        fair_value_total = (fv_kgv + fv_fcf + fv_dcf) / 3.0
+        upside = ((fair_value_total - price) / price) * 100
 
-        a,b,c,d = st.columns(4)
-        a.metric("Aktueller Kurs", f"{price:,.2f} €")
-        b.metric("Fair Value", f"{fair_value:,.2f} €")
-        c.metric("Potenzial", f"{upside:+.1%}")
-        d.metric("Urteil", verdict)
+        # Sterne-Bewertung
+        score_growth = "⭐" * (5 if growth > 0.15 else 4 if growth > 0.08 else 3 if growth > 0.02 else 2)
+        score_debt = "⭐" * (5 if debt_to_equity < 0.5 else 4 if debt_to_equity < 1.0 else 3 if debt_to_equity < 2.0 else 2)
+        score_val = "⭐" * (5 if upside > 20 else 4 if upside > 0 else 2)
+
+        verdict = "🟢 KAUFEN" if upside >= 15 else "🟡 HALTEN" if upside >= -5 else "🔴 VERKAUFEN"
+
+        # Ausgabe
+        st.subheader(f"Ergebnis für {info.get('longName', ticker_symbol)}")
+
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Aktueller Kurs", f"{price:.2f} {currency_symbol}")
+        c2.metric("Gesamt-Fair-Value", f"{fair_value_total:.2f} {currency_symbol}")
+        c3.metric("Sicherheitspuffer", f"{upside:+.1f} %")
+        c4.metric("Urteil", verdict)
 
         st.divider()
 
-        st.subheader("Bewertung")
-        left, right = st.columns(2)
-        with left:
-            st.write(f"**EPS aktuell:** {eps:.2f} €")
-            st.write(f"**Fair Value EPS-Modell:** {fair_eps_model:.2f} €")
-            st.write(f"**Fair Value KGV-Modell:** {fair_pe:.2f} €")
-        with right:
-            st.write(f"**15-%-Sicherheitsmarge:** {margin_price:.2f} €")
-            st.write(f"**Diskontsatz:** {discount:.1%}")
-            st.write(f"**Langfristiges Wachstum:** {terminal_growth:.1%}")
+        col_l, col_r = st.columns(2)
+        with col_l:
+            st.markdown("### 🎯 Fair-Value-Verfahren")
+            st.write(f"**DCF-Modell:** {fv_dcf:.2f} {currency_symbol}")
+            st.write(f"**KGV-Modell:** {fv_kgv:.2f} {currency_symbol}")
+            st.write(f"**FCF-Modell:** {fv_fcf:.2f} {currency_symbol}")
+            st.write(f"**KGV:** {pe_ratio:.1f} | **KBV:** {pb_ratio:.1f} | **EV/EBITDA:** {ev_ebitda:.1f}")
 
-        st.subheader("EPS-Prognose")
-        st.line_chart({"EPS": eps_forecast}, x_label="Prognosejahr", y_label="€")
-
-        st.info("Hinweis: Dies ist ein Prototyp und keine Anlageberatung. Finanzdaten können unvollständig oder verzögert sein; die Bewertungsannahmen sollten vor einer Anlageentscheidung geprüft werden.")
+        with col_r:
+            st.markdown("### ⭐ Automatische Bewertung")
+            st.write(f"**Wachstum:** {score_growth}")
+            st.write(f"**Verschuldung:** {score_debt}")
+            st.write(f"**Bewertung / Upside:** {score_val}")
 
     except Exception as e:
-        st.error(f"Fehler beim Abrufen der Aktie: {e}")
+        st.error(f"Fehler bei der Analyse: {e}")
 
-st.divider()
-st.caption("Version 1 – als nächstes können wir Versicherer wie Allianz mit einem speziellen Modell behandeln und danach beliebige Aktien automatisch analysieren.")
