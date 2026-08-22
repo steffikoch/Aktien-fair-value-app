@@ -10,7 +10,8 @@ ticker = st.text_input("Aktie / Ticker", "ALV.DE").upper().strip()
 
 c1, c2, c3 = st.columns(3)
 with c1:
-    discount = st.number_input("Diskontsatz / Eigenkapitalkosten", 0.04, 0.15, 0.08, 0.005, format="%.1f%%")
+    discount = st.number_input("Diskontsatz (%)", min_value=0.0, max_value=1.0, value=0.10, step=0.01, format="%.2f")
+
 with c2:
     terminal_growth = st.number_input("Langfristiges Wachstum", 0.00, 0.04, 0.02, 0.005, format="%.1f%%")
 with c3:
