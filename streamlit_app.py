@@ -13,9 +13,9 @@ with c1:
     discount = st.number_input("Diskontsatz (%)", min_value=0.0, max_value=1.0, value=0.10, step=0.01, format="%.2f")
 
 with c2:
-    terminal_growth = st.number_input("Langfristiges Wachstum", 0.00, 0.04, 0.02, 0.005, format="%.1f%%")
+    terminal_growth = st.number_input("Langfristiges Wachstum", min_value=0.0, max_value=0.1, value=0.02, step=0.005, format="%.3f")
 with c3:
-    target_pe = st.number_input("Ziel-KGV", 8.0, 20.0, 13.0, 0.5)
+    target_pe = st.number_input("Ziel-KGV", min_value=1.0, max_value=100.0, value=15.0, step=1.0, format="%.1f")
 
 if st.button("🔄 Aktie analysieren", type="primary"):
     try:
