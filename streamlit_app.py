@@ -89,49 +89,41 @@ with tab1:
                 base_cashflow_per_share = max(eps, fcf_per_share)
                 fcf_correction_applied = True
 
-            # 2. Wachstumsrate realistischer deckeln (Umsatzwachstum nutzen)
+            # Hilfsfunktion für Fair Value Berechnung nach Wachstumsrate
+            def calc_fair_value(growth_rate):
+                forward_pe = info.get("forwardPE") or target_pe
+                usable_pe = min(forward_pe, 25.0) if forward_pe > 0 else target_pe
+                
+                fv_k = eps * usable_pe if eps > 0 else None
+                fv_f = base_cashflow_per_share * target_pe if base_cashflow_per_share > 0 else None
+                
+                if base_cashflow_per_share > 0 and discount_rate > terminal_growth:
+                    cashflows = [base_cashflow_per_share * ((1 + growth_rate) ** i) for i in range(1, 6)]
+                    pv_cashflows = sum([cf / ((1 + discount_rate) ** i) for i, cf in enumerate(cashflows, 1)])
+                    terminal_value = (cashflows[-1] * (1 + terminal_growth)) / (discount_rate - terminal_growth)
+                    fv_d = pv_cashflows + (terminal_value / ((1 + discount_rate) ** 5))
+                else:
+                    fv_d = None
+
+                m, w = [], []
+                if fv_f is not None: m.append(fv_f); w.append(0.5)
+                if fv_d is not None: m.append(fv_d); w.append(0.3)
+                if fv_k is not None: m.append(fv_k); w.append(0.2)
+                
+                return sum(x * y for x, y in zip(m, w)) / sum(w) if m else price, fv_d, fv_k, fv_f
+
+            # Wachstumsraten für Szenarien
             raw_growth = info.get("revenueGrowth", 0.05) or 0.05
-            dcf_growth = max(0.02, min(raw_growth, 0.08)) # Konservativer Deckel bei max. 8%
+            base_g = max(0.02, min(raw_growth, 0.08))
+            bear_g = max(0.0, base_g - 0.03)
+            best_g = min(0.15, base_g + 0.04)
 
-            # 3. KGV-Modell (Geglättet mit Forward PE)
-            forward_pe = info.get("forwardPE") or target_pe
-            usable_pe = min(forward_pe, 25.0) if forward_pe > 0 else target_pe
-            if eps > 0:
-                fv_kgv = eps * usable_pe
-            else:
-                fv_kgv = None
+            # Szenarien berechnen
+            fv_base, fv_dcf, fv_kgv, fv_fcf = calc_fair_value(base_g)
+            fv_bear, _, _, _ = calc_fair_value(bear_g)
+            fv_best, _, _, _ = calc_fair_value(best_g)
 
-            # 4. Cashflow / Multiplikator-Modell
-            fv_fcf = base_cashflow_per_share * target_pe if base_cashflow_per_share > 0 else None
-
-            # 5. DCF-Modell
-            if base_cashflow_per_share > 0 and discount_rate > terminal_growth:
-                cashflows = [base_cashflow_per_share * ((1 + dcf_growth) ** i) for i in range(1, 6)]
-                pv_cashflows = sum([cf / ((1 + discount_rate) ** i) for i, cf in enumerate(cashflows, 1)])
-                terminal_value = (cashflows[-1] * (1 + terminal_growth)) / (discount_rate - terminal_growth)
-                fv_dcf = pv_cashflows + (terminal_value / ((1 + discount_rate) ** 5))
-            else:
-                fv_dcf = None
-
-            # Gesamtwert mit gewichtetem Durchschnitt berechnen
-            models = []
-            weights = []
-            if fv_fcf is not None:
-                models.append(fv_fcf)
-                weights.append(0.5) # FCF am höchsten gewichten
-            if fv_dcf is not None:
-                models.append(fv_dcf)
-                weights.append(0.3)
-            if fv_kgv is not None:
-                models.append(fv_kgv)
-                weights.append(0.2)
-
-            if models:
-                fair_value_total = sum(m * w for m, w in zip(models, weights)) / sum(weights)
-            else:
-                fair_value_total = price
-
-            upside = ((fair_value_total - price) / price) * 100
+            upside = ((fv_base - price) / price) * 100
 
             # Urteilslogik
             valuation_text = f"🟢 **Unterbewertet um {upside:.1f} %**" if upside > 0 else f"🔴 **Überbewertet um {abs(upside):.1f} %**"
@@ -141,7 +133,7 @@ with tab1:
 
             c1, c2, c3, c4 = st.columns(4)
             c1.metric("Aktueller Kurs", f"{price:.2f} {currency_symbol}")
-            c2.metric("Gesamt-Fair-Value", f"{fair_value_total:.2f} {currency_symbol}")
+            c2.metric("Base-Case Fair Value", f"{fv_base:.2f} {currency_symbol}")
             c3.metric("Sicherheitspuffer", f"{upside:+.1f} %")
             c4.metric("Urteil", verdict)
 
@@ -151,9 +143,18 @@ with tab1:
             
             st.divider()
 
+            # NEU: SZENARIO-ANALYSE
+            st.markdown("### 🎭 Szenario-Analyse (Best / Base / Bear)")
+            sc1, sc2, sc3 = st.columns(3)
+            sc1.metric("🔴 Bear-Case (Konservativ)", f"{fv_bear:.2f} {currency_symbol}", delta=f"{((fv_bear - price)/price)*100:+.1f} %")
+            sc2.metric("🟡 Base-Case (Realistisch)", f"{fv_base:.2f} {currency_symbol}", delta=f"{upside:+.1f} %")
+            sc3.metric("🟢 Best-Case (Optimistisch)", f"{fv_best:.2f} {currency_symbol}", delta=f"{((fv_best - price)/price)*100:+.1f} %")
+
+            st.divider()
+
             col_l, col_r = st.columns(2)
             with col_l:
-                st.markdown("### 🎯 Fair-Value-Verfahren")
+                st.markdown("### 🎯 Fair-Value-Verfahren (Base Case)")
                 st.write(f"**DCF-Modell:** {f'{fv_dcf:.2f} {currency_symbol}' if fv_dcf else 'N/A'}")
                 st.write(f"**KGV-Modell:** {f'{fv_kgv:.2f} {currency_symbol}' if fv_kgv else 'N/A'}")
                 st.write(f"**FCF-Modell:** {f'{fv_fcf:.2f} {currency_symbol}' if fv_fcf else 'N/A'}")
