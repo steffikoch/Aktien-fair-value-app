@@ -41,9 +41,19 @@ if st.button("Aktie analysieren", type="primary"):
         growth = info.get("earningsGrowth", 0.05) or 0.05
         debt_to_equity = (info.get("debtToEquity", 100) or 100) / 100.0
 
-        # Dividenden-Daten
-        div_yield = (info.get("dividendYield", 0) or 0) * 100
-        payout_ratio = (info.get("payoutRatio", 0) or 0) * 100
+            # Dividenden-Daten korrigiert
+        raw_div = info.get("dividendYield") or 0
+        if raw_div > 1:  # Falls Yahoo den absoluten Geldbetrag statt % liefert
+            div_yield = (raw_div / price) * 100 if price else 0
+        else:
+            div_yield = raw_div * 100
+
+        payout_ratio = (info.get("payoutRatio") or 0) * 100
+        if payout_ratio > 200: # Abfangen von extremen Ausreißern
+            payout_ratio = 0
+
+
+        
 
         if not price or price == 0:
             st.error("Keine gültigen Kursdaten für diesen Ticker gefunden.")
