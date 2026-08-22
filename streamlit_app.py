@@ -62,8 +62,21 @@ with tab1:
             profit_margins = (info.get("profitMargins", 0) or 0) * 100
             sector = info.get("sector", "")
 
-            raw_div = info.get("dividendYield") or 0
-            div_yield = (raw_div / price) * 100 if raw_div > 1 else raw_div * 100
+            # Dividendenrendite sauber berechnen und Plausibilität prüfen
+raw_div = info.get("dividendYield") or 0
+
+if raw_div > 0:
+    if raw_div > 1.0 and raw_div <= 20.0:
+        div_yield = raw_div
+    elif raw_div <= 1.0:
+        div_yield = raw_div * 100
+    else:
+        div_rate = info.get("dividendRate") or 0
+        div_yield = (div_rate / price * 100) if price > 0 and div_rate > 0 else 0.0
+else:
+    div_yield = 0.0
+
+            
 
             if not price or price == 0:
                 st.error("Keine gültigen Kursdaten für diesen Ticker gefunden.")
