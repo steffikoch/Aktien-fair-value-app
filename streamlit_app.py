@@ -8,7 +8,6 @@ st.title("📈 Fair-Value-Analyse, Watchlist & Risikocheck")
 
 WATCHLIST_FILE = "watchlist.json"
 
-# Funktionen zum Laden und Speichern der JSON-Datei
 def load_watchlist():
     if os.path.exists(WATCHLIST_FILE):
         try:
@@ -16,7 +15,7 @@ def load_watchlist():
                 return json.load(f)
         except:
             pass
-    return {"ALV.DE": 220.0, "AAPL": 170.0, "MSFT": 380.0, "VC": 95.0, "ALB": 130.0}
+    return {"ALV.DE": 220.0, "AAPL": 170.0, "MSFT": 380.0, "VC": 95.0, "NEE": 80.0}
 
 def save_watchlist(data):
     try:
@@ -25,7 +24,6 @@ def save_watchlist(data):
     except Exception as e:
         st.error(f"Fehler beim Speichern der Watchlist: {e}")
 
-# Initialisierung der Watchlist
 if "watchlist_data" not in st.session_state:
     st.session_state.watchlist_data = load_watchlist()
 
@@ -33,15 +31,14 @@ if "watchlist_data" not in st.session_state:
 st.sidebar.header("⚙️ Bewertungsparameter")
 discount_rate = st.sidebar.number_input("Diskontsatz (%)", min_value=1.0, max_value=20.0, value=10.0, step=0.5) / 100.0
 terminal_growth = st.sidebar.number_input("Ewiges Wachstum (%)", min_value=0.0, max_value=5.0, value=2.0, step=0.1) / 100.0
-target_pe = st.sidebar.number_input("Ziel-KGV", min_value=5.0, max_value=50.0, value=15.0, step=1.0)
+target_pe = st.sidebar.number_input("Ziel-KGV / Vielfaches", min_value=5.0, max_value=50.0, value=15.0, step=1.0)
 
-# Tabs
 tab1, tab2 = st.tabs(["🔍 Einzelanalyse", "📋 Watchlist & Kauflimits"])
 
 # TAB 1: EINZELANALYSE
 with tab1:
     quick_select = st.selectbox("Wähle aus deinen Favoriten oder gebe manuell ein:", ["Manuell"] + list(st.session_state.watchlist_data.keys()))
-    ticker_input = st.text_input("Gib Ticker ein:", "ALV.DE") if quick_select == "Manuell" else quick_select
+    ticker_input = st.text_input("Gib Ticker ein:", "NEE") if quick_select == "Manuell" else quick_select
     ticker_symbol = ticker_input.upper().strip()
 
     if st.button("Aktie analysieren", type="primary"):
@@ -55,29 +52,15 @@ with tab1:
             price = info.get("currentPrice") or info.get("regularMarketPrice", 0)
             eps = info.get("trailingEps", 0) or 0
             shares = info.get("sharesOutstanding", 1) or 1
-            
-            # FCF Absicherung
             fcf = info.get("freeCashflow", 0) or 0
-            if fcf <= 0:
-                try:
-                    cf_stmt = ticker.cashflow
-                    if cf_stmt is not None and not cf_stmt.empty:
-                        op_cf = cf_stmt.loc['Operating Cash Flow'].iloc[0] if 'Operating Cash Flow' in cf_stmt.index else 0
-                        cap_ex = cf_stmt.loc['Capital Expenditure'].iloc[0] if 'Capital Expenditure' in cf_stmt.index else 0
-                        fcf = op_cf + cap_ex  # CapEx ist meist negativ
-                except:
-                    pass
-
+            
             pe_ratio = info.get("trailingPE", 0) or 0
             pb_ratio = info.get("priceToBook", 0) or 0
             ev_ebitda = info.get("enterpriseToEbitda", 0) or 0
             
-            # Wachstumsrate absichern (min. 4%, max. 15%)
-            raw_growth = info.get("earningsGrowth", 0.05) or 0.05
-            dcf_growth = max(0.04, min(raw_growth, 0.15))
-            
             beta = info.get("beta", 1.0) or 1.0
             profit_margins = (info.get("profitMargins", 0) or 0) * 100
+            sector = info.get("sector", "")
 
             raw_div = info.get("dividendYield") or 0
             div_yield = (raw_div / price) * 100 if raw_div > 1 else raw_div * 100
@@ -86,37 +69,46 @@ with tab1:
                 st.error("Keine gültigen Kursdaten für diesen Ticker gefunden.")
                 st.stop()
 
+            # 1. Basis-Metrik für Cashflow bestimmen
             fcf_per_share = fcf / shares if shares > 0 else 0
+            base_cashflow_per_share = fcf_per_share
 
-            # 1. KGV-Modell (KGV-Ausreißer > 80 filtern)
+            # Korrektur für kapitalintensive Branchen (Utilities, Real Estate) oder hohes CapEx bei hoher Profitabilität
+            fcf_correction_applied = False
+            if sector in ["Utilities", "Real Estate", "Financial Services"] or (fcf_per_share < (eps * 0.5) and profit_margins > 10.0):
+                base_cashflow_per_share = max(eps, fcf_per_share)
+                fcf_correction_applied = True
+
+            # 2. Wachstumsrate festlegen
+            raw_growth = info.get("earningsGrowth", 0.05) or 0.05
+            dcf_growth = max(0.04, min(raw_growth, 0.15))
+
+            # 3. KGV-Modell
             if eps > 0 and (pe_ratio <= 80 or pe_ratio == 0):
                 fv_kgv = eps * target_pe
             else:
                 fv_kgv = None
 
-            # 2. FCF-Modell
-            fv_fcf = fcf_per_share * target_pe if fcf_per_share > 0 else None
+            # 4. Cashflow / Multiplikator-Modell
+            fv_fcf = base_cashflow_per_share * target_pe if base_cashflow_per_share > 0 else None
 
-            # 3. DCF-Modell
-            if fcf_per_share > 0 and discount_rate > terminal_growth:
-                cashflows = [fcf_per_share * ((1 + dcf_growth) ** i) for i in range(1, 6)]
+            # 5. DCF-Modell
+            if base_cashflow_per_share > 0 and discount_rate > terminal_growth:
+                cashflows = [base_cashflow_per_share * ((1 + dcf_growth) ** i) for i in range(1, 6)]
                 pv_cashflows = sum([cf / ((1 + discount_rate) ** i) for i, cf in enumerate(cashflows, 1)])
                 terminal_value = (cashflows[-1] * (1 + terminal_growth)) / (discount_rate - terminal_growth)
                 fv_dcf = pv_cashflows + (terminal_value / ((1 + discount_rate) ** 5))
             else:
                 fv_dcf = None
 
-            # Plausibilitätsprüfung: Falls DCF extrem unter FCF-Modell fällt, durch FCF ersetzen
-            if fv_dcf and fv_fcf and fv_dcf < (fv_fcf * 0.4):
-                fv_dcf = fv_fcf
-
-            # Gesamt-Fair-Value berechnen
+            # Gesamtwert berechnen
             valid_models = [m for m in [fv_kgv, fv_fcf, fv_dcf] if m is not None]
             fair_value_total = sum(valid_models) / len(valid_models) if valid_models else price
             upside = ((fair_value_total - price) / price) * 100
 
+            # Optimierte Urteilslogik (Korridor -15% bis +15% als neutral/HALTEN)
             valuation_text = f"🟢 **Unterbewertet um {upside:.1f} %**" if upside > 0 else f"🔴 **Überbewertet um {abs(upside):.1f} %**"
-            verdict = "🟢 KAUFEN" if upside >= 15 else "🟡 HALTEN" if upside >= -5 else "🔴 VERKAUFEN"
+            verdict = "🟢 KAUFEN" if upside >= 15 else "🟡 HALTEN" if upside >= -15 else "🔴 VERKAUFEN"
 
             st.subheader(f"Ergebnis für {info.get('longName', ticker_symbol)}")
 
@@ -127,6 +119,9 @@ with tab1:
             c4.metric("Urteil", verdict)
 
             st.info(f"Einschätzung zur Bewertung: {valuation_text}")
+            if fcf_correction_applied:
+                st.caption("ℹ️ **Hinweis:** Da es sich um ein kapitalintensives Unternehmen / Versorger handelt, wurde das FCF-/DCF-Modell auf Basis der Ertragskraft bereinigt.")
+            
             st.divider()
 
             col_l, col_r = st.columns(2)
@@ -217,3 +212,4 @@ with tab2:
             st.info("Aktuell hat keine Aktie in deiner Watchlist dein Kauflimit unterschritten.")
 
         st.table(rows)
+
