@@ -1,4 +1,3 @@
-
 import streamlit as st
 import yfinance as yf
 
@@ -41,19 +40,16 @@ if st.button("Aktie analysieren", type="primary"):
         growth = info.get("earningsGrowth", 0.05) or 0.05
         debt_to_equity = (info.get("debtToEquity", 100) or 100) / 100.0
 
-            # Dividenden-Daten korrigiert
+        # Dividenden-Daten (mit Korrektur)
         raw_div = info.get("dividendYield") or 0
-        if raw_div > 1:  # Falls Yahoo den absoluten Geldbetrag statt % liefert
+        if raw_div > 1:
             div_yield = (raw_div / price) * 100 if price else 0
         else:
             div_yield = raw_div * 100
 
         payout_ratio = (info.get("payoutRatio") or 0) * 100
-        if payout_ratio > 200: # Abfangen von extremen Ausreißern
+        if payout_ratio > 200:
             payout_ratio = 0
-
-
-        
 
         if not price or price == 0:
             st.error("Keine gültigen Kursdaten für diesen Ticker gefunden.")
@@ -75,10 +71,18 @@ if st.button("Aktie analysieren", type="primary"):
         else:
             fv_dcf = None
 
-        # Dynamische Mittelwertbildung (nur gültige Modelle nutzen)
+        # Dynamische Mittelwertbildung
         valid_models = [m for m in [fv_kgv, fv_fcf, fv_dcf] if m is not None]
         fair_value_total = sum(valid_models) / len(valid_models) if valid_models else price
         upside = ((fair_value_total - price) / price) * 100
+
+        # Status: Unter- oder Überbewertet
+        if upside > 0:
+            valuation_text = f"🟢 **Unterbewertet um {upside:.1f} %**"
+        elif upside < 0:
+            valuation_text = f"🔴 **Überbewertet um {abs(upside):.1f} %**"
+        else:
+            valuation_text = "⚪ **Fair bewertet**"
 
         # Sterne-Bewertung
         score_growth = "⭐" * (5 if growth > 0.15 else 4 if growth > 0.08 else 3 if growth > 0.02 else 2)
@@ -95,6 +99,9 @@ if st.button("Aktie analysieren", type="primary"):
         c2.metric("Gesamt-Fair-Value", f"{fair_value_total:.2f} {currency_symbol}")
         c3.metric("Sicherheitspuffer", f"{upside:+.1f} %")
         c4.metric("Urteil", verdict)
+
+        # Neue Info-Box für Unter-/Überbewertung
+        st.info(f"Einschätzung zur Bewertung: {valuation_text}")
 
         st.divider()
 
@@ -114,7 +121,6 @@ if st.button("Aktie analysieren", type="primary"):
 
         st.divider()
 
-        # Neuer Bereich: Dividenden & Kursverlauf
         c_div, c_chart = st.columns(2)
         
         with c_div:
@@ -130,4 +136,5 @@ if st.button("Aktie analysieren", type="primary"):
 
     except Exception as e:
         st.error(f"Fehler bei der Analyse: {e}")
+
 
