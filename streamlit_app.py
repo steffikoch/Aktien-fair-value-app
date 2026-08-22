@@ -1,38 +1,41 @@
-
 import streamlit as st
 import yfinance as yf
+import json
+import os
 
 st.set_page_config(page_title="Fair Value & Watchlist Alerts", layout="wide")
-st.title("📈 Fair-Value-Analyse, Watchlist & Preis-Alerts")
+st.title("📈 Fair-Value-Analyse, Watchlist & Risikocheck")
 
-# Watchlist im Speicher initialisieren (mit Standard-Zielpreisen)
+WATCHLIST_FILE = "watchlist.json"
+
+# Funktionen zum Laden und Speichern der JSON-Datei
+def load_watchlist():
+    if os.path.exists(WATCHLIST_FILE):
+        try:
+            with open(WATCHLIST_FILE, "r") as f:
+                return json.load(f)
+        except:
+            pass
+    return {"ALV.DE": 220.0, "AAPL": 170.0, "MSFT": 380.0}
+
+def save_watchlist(data):
+    try:
+        with open(WATCHLIST_FILE, "w") as f:
+            json.dump(data, f, indent=4)
+    except Exception as e:
+        st.error(f"Fehler beim Speichern der Watchlist: {e}")
+
+# Initialisierung der Watchlist
 if "watchlist_data" not in st.session_state:
-    st.session_state.watchlist_data = {
-        "ALV.DE": 220.0,
-        "AAPL": 170.0,
-        "MSFT": 380.0
-    }
+    st.session_state.watchlist_data = load_watchlist()
 
-# Seitenleiste: Parameter & Watchlist-Verwaltung
+# Seitenleiste: Parameter
 st.sidebar.header("⚙️ Bewertungsparameter")
 discount_rate = st.sidebar.number_input("Diskontsatz (%)", min_value=1.0, max_value=20.0, value=10.0, step=0.5) / 100.0
 terminal_growth = st.sidebar.number_input("Ewiges Wachstum (%)", min_value=0.0, max_value=5.0, value=2.0, step=0.1) / 100.0
 target_pe = st.sidebar.number_input("Ziel-KGV", min_value=5.0, max_value=50.0, value=15.0, step=1.0)
 
-st.sidebar.divider()
-st.sidebar.header("⭐ Watchlist & Zielpreise")
-
-# Neue Aktie mit Zielpreis hinzufügen
-with st.sidebar.form("add_ticker_form"):
-    new_ticker = st.text_input("Ticker eingeben (z.B. ALV.DE):", "").upper().strip()
-    new_target_price = st.number_input("Wunsch-Kaufpreis / Limit (€/$):", min_value=0.0, value=100.0, step=1.0)
-    add_submitted = st.form_submit_button("Aktie hinzufügen")
-    
-    if add_submitted and new_ticker:
-        st.session_state.watchlist_data[new_ticker] = float(new_target_price)
-        st.success(f"{new_ticker} mit Zielpreis {new_target_price:.2f} hinzugefügt!")
-
-# Tabs für Analyse und Watchlist
+# Tabs
 tab1, tab2 = st.tabs(["🔍 Einzelanalyse", "📋 Watchlist & Kauflimits"])
 
 # TAB 1: EINZELANALYSE
@@ -59,6 +62,10 @@ with tab1:
             ev_ebitda = info.get("enterpriseToEbitda", 0) or 0
             growth = info.get("earningsGrowth", 0.05) or 0.05
             debt_to_equity = (info.get("debtToEquity", 100) or 100) / 100.0
+            
+            # Risiko & Qualitätskennzahlen
+            beta = info.get("beta", 1.0) or 1.0
+            profit_margins = (info.get("profitMargins", 0) or 0) * 100
 
             raw_div = info.get("dividendYield") or 0
             div_yield = (raw_div / price) * 100 if raw_div > 1 else raw_div * 100
@@ -107,10 +114,11 @@ with tab1:
                 st.write(f"**KGV-Modell:** {f'{fv_kgv:.2f} {currency_symbol}' if fv_kgv else 'N/A'}")
                 st.write(f"**FCF-Modell:** {f'{fv_fcf:.2f} {currency_symbol}' if fv_fcf else 'N/A'}")
             with col_r:
-                st.markdown("### ⭐ Kennzahlen & Dividenden")
+                st.markdown("### 📊 Risikocheck & Qualität")
+                st.write(f"**Beta (Schwankung):** {beta:.2f} " + ("🟢 (Ruhig)" if beta < 1 else "🔴 (Schwankungsintensiv)"))
+                st.write(f"**Nettomarge:** {profit_margins:.1f} %")
                 st.write(f"**KGV:** {pe_ratio:.1f} | **KBV:** {pb_ratio:.1f} | **EV/EBITDA:** {ev_ebitda:.1f}")
                 st.write(f"**Dividendenrendite:** {div_yield:.2f} %")
-                st.write(f"**Ausschüttungsquote:** {payout_ratio:.1f} %")
 
             st.divider()
             hist = ticker.history(period="1y")
@@ -121,30 +129,33 @@ with tab1:
         except Exception as e:
             st.error(f"Fehler bei der Analyse: {e}")
 
-
-# TAB 2: WATCHLIST & PREIS-ALERTS (Jetzt direkt bearbeitbar)
+# TAB 2: WATCHLIST & PREIS-ALERTS
 with tab2:
     st.subheader("📋 Watchlist & Kauflimits bearbeiten")
 
-    # Interaktiver Editor für bestehende Limits
     edited_data = []
     for sym, limit in list(st.session_state.watchlist_data.items()):
         edited_data.append({"Ticker": sym, "Kauflimit": limit})
 
-    st.write("Ändere dein Kauflimit direkt in der Tabelle:")
+    st.write("Bearbeite deine Kauflimits direkt in der Tabelle (Änderungen werden automatisch gespeichert):")
     edited_df = st.data_editor(
         edited_data,
-        num_rows="dynamic", # Erlaubt auch das Hinzufügen/Löschen von Zeilen
+        num_rows="dynamic",
         key="watchlist_editor"
     )
 
-    # Aktualisiert die Session-Daten, wenn in der Tabelle etwas geändert wird
-    if edited_df:
+    # Automatisch in JSON speichern, wenn in der Tabelle editiert wird
+    if edited_df is not None:
         new_dict = {}
         for row in edited_df:
             if row.get("Ticker"):
-                new_dict[row["Ticker"].upper().strip()] = float(row.get("Kauflimit", 0))
-        st.session_state.watchlist_data = new_dict
+                t_name = str(row["Ticker"]).upper().strip()
+                t_limit = float(row.get("Kauflimit", 0)) if row.get("Kauflimit") else 0.0
+                new_dict[t_name] = t_limit
+        
+        if new_dict != st.session_state.watchlist_data:
+            st.session_state.watchlist_data = new_dict
+            save_watchlist(new_dict)
 
     st.divider()
 
@@ -185,5 +196,6 @@ with tab2:
             st.info("Aktuell hat keine Aktie in deiner Watchlist dein Kauflimit unterschritten.")
 
         st.table(rows)
+
 
 
