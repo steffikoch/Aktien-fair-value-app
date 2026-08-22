@@ -78,9 +78,16 @@ with tab1:
 
             fcf_per_share = fcf / shares if shares > 0 else 0
 
-            fv_kgv = eps * target_pe if eps > 0 else None
+            # KGV-Modell (KGV-Ausreißer > 80 filtern)
+            if eps > 0 and (pe_ratio <= 80 or pe_ratio == 0):
+                fv_kgv = eps * target_pe
+            else:
+                fv_kgv = None
+
+            # FCF-Modell
             fv_fcf = fcf_per_share * target_pe if fcf_per_share > 0 else None
 
+            # DCF-Modell
             if fcf_per_share > 0 and discount_rate > terminal_growth:
                 cashflows = [fcf_per_share * ((1 + growth) ** i) for i in range(1, 6)]
                 pv_cashflows = sum([cf / ((1 + discount_rate) ** i) for i, cf in enumerate(cashflows, 1)])
@@ -89,6 +96,7 @@ with tab1:
             else:
                 fv_dcf = None
 
+            # Nur valide Modelle in den Gesamt-Fair-Value einbeziehen
             valid_models = [m for m in [fv_kgv, fv_fcf, fv_dcf] if m is not None]
             fair_value_total = sum(valid_models) / len(valid_models) if valid_models else price
             upside = ((fair_value_total - price) / price) * 100
@@ -111,7 +119,7 @@ with tab1:
             with col_l:
                 st.markdown("### 🎯 Fair-Value-Verfahren")
                 st.write(f"**DCF-Modell:** {f'{fv_dcf:.2f} {currency_symbol}' if fv_dcf else 'N/A'}")
-                st.write(f"**KGV-Modell:** {f'{fv_kgv:.2f} {currency_symbol}' if fv_kgv else 'N/A'}")
+                st.write(f"**KGV-Modell:** {f'{fv_kgv:.2f} {currency_symbol}' if fv_kgv else 'Ausreißer (Ignoriert)'}")
                 st.write(f"**FCF-Modell:** {f'{fv_fcf:.2f} {currency_symbol}' if fv_fcf else 'N/A'}")
             with col_r:
                 st.markdown("### 📊 Risikocheck & Qualität")
@@ -144,7 +152,6 @@ with tab2:
         key="watchlist_editor"
     )
 
-    # Automatisch in JSON speichern, wenn in der Tabelle editiert wird
     if edited_df is not None:
         new_dict = {}
         for row in edited_df:
@@ -196,6 +203,3 @@ with tab2:
             st.info("Aktuell hat keine Aktie in deiner Watchlist dein Kauflimit unterschritten.")
 
         st.table(rows)
-
-
-
