@@ -62,7 +62,7 @@ with tab1:
             profit_margins = (info.get("profitMargins", 0) or 0) * 100
             sector = info.get("sector", "")
 
-            # Dividendenrendite sauber berechnen und Plausibilität prüfen (>20% Abfang)
+            # Dividendenrendite sauber berechnen
             raw_div = info.get("dividendYield") or 0
             if raw_div > 0:
                 if raw_div > 1.0 and raw_div <= 20.0:
@@ -83,19 +83,21 @@ with tab1:
             fcf_per_share = fcf / shares if shares > 0 else 0
             base_cashflow_per_share = fcf_per_share
 
-            # Korrektur für kapitalintensive Branchen (Utilities, Real Estate) oder hohes CapEx bei hoher Profitabilität
+            # Korrektur für kapitalintensive Branchen
             fcf_correction_applied = False
             if sector in ["Utilities", "Real Estate", "Financial Services"] or (fcf_per_share < (eps * 0.5) and profit_margins > 10.0):
                 base_cashflow_per_share = max(eps, fcf_per_share)
                 fcf_correction_applied = True
 
-            # 2. Wachstumsrate festlegen
-            raw_growth = info.get("earningsGrowth", 0.05) or 0.05
-            dcf_growth = max(0.04, min(raw_growth, 0.15))
+            # 2. Wachstumsrate realistischer deckeln (Umsatzwachstum nutzen)
+            raw_growth = info.get("revenueGrowth", 0.05) or 0.05
+            dcf_growth = max(0.02, min(raw_growth, 0.08)) # Konservativer Deckel bei max. 8%
 
-            # 3. KGV-Modell
-            if eps > 0 and (pe_ratio <= 80 or pe_ratio == 0):
-                fv_kgv = eps * target_pe
+            # 3. KGV-Modell (Geglättet mit Forward PE)
+            forward_pe = info.get("forwardPE") or target_pe
+            usable_pe = min(forward_pe, 25.0) if forward_pe > 0 else target_pe
+            if eps > 0:
+                fv_kgv = eps * usable_pe
             else:
                 fv_kgv = None
 
@@ -111,12 +113,27 @@ with tab1:
             else:
                 fv_dcf = None
 
-            # Gesamtwert berechnen
-            valid_models = [m for m in [fv_kgv, fv_fcf, fv_dcf] if m is not None]
-            fair_value_total = sum(valid_models) / len(valid_models) if valid_models else price
+            # Gesamtwert mit gewichtetem Durchschnitt berechnen
+            models = []
+            weights = []
+            if fv_fcf is not None:
+                models.append(fv_fcf)
+                weights.append(0.5) # FCF am höchsten gewichten
+            if fv_dcf is not None:
+                models.append(fv_dcf)
+                weights.append(0.3)
+            if fv_kgv is not None:
+                models.append(fv_kgv)
+                weights.append(0.2)
+
+            if models:
+                fair_value_total = sum(m * w for m, w in zip(models, weights)) / sum(weights)
+            else:
+                fair_value_total = price
+
             upside = ((fair_value_total - price) / price) * 100
 
-            # Optimierte Urteilslogik (Korridor -15% bis +15% als neutral/HALTEN)
+            # Urteilslogik
             valuation_text = f"🟢 **Unterbewertet um {upside:.1f} %**" if upside > 0 else f"🔴 **Überbewertet um {abs(upside):.1f} %**"
             verdict = "🟢 KAUFEN" if upside >= 15 else "🟡 HALTEN" if upside >= -15 else "🔴 VERKAUFEN"
 
@@ -138,7 +155,7 @@ with tab1:
             with col_l:
                 st.markdown("### 🎯 Fair-Value-Verfahren")
                 st.write(f"**DCF-Modell:** {f'{fv_dcf:.2f} {currency_symbol}' if fv_dcf else 'N/A'}")
-                st.write(f"**KGV-Modell:** {f'{fv_kgv:.2f} {currency_symbol}' if fv_kgv else 'Ausreißer (Ignoriert)'}")
+                st.write(f"**KGV-Modell:** {f'{fv_kgv:.2f} {currency_symbol}' if fv_kgv else 'N/A'}")
                 st.write(f"**FCF-Modell:** {f'{fv_fcf:.2f} {currency_symbol}' if fv_fcf else 'N/A'}")
             with col_r:
                 st.markdown("### 📊 Risikocheck & Qualität")
@@ -223,4 +240,5 @@ with tab2:
             st.info("Aktuell hat keine Aktie in deiner Watchlist dein Kauflimit unterschritten.")
 
         st.table(rows)
+
 
