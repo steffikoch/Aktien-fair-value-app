@@ -121,17 +121,34 @@ with tab1:
         except Exception as e:
             st.error(f"Fehler bei der Analyse: {e}")
 
-# TAB 2: WATCHLIST & PREIS-ALERTS
-with tab2:
-    st.subheader("📋 Watchlist & Kauflimit-Check")
-    
-    col_btn, _ = st.columns([1, 3])
-    with col_btn:
-        refresh = st.button("🔄 Kurse & Signals prüfen", type="primary")
 
-    if refresh or "first_load" not in st.session_state:
-        st.session_state.first_load = True
-        
+# TAB 2: WATCHLIST & PREIS-ALERTS (Jetzt direkt bearbeitbar)
+with tab2:
+    st.subheader("📋 Watchlist & Kauflimits bearbeiten")
+
+    # Interaktiver Editor für bestehende Limits
+    edited_data = []
+    for sym, limit in list(st.session_state.watchlist_data.items()):
+        edited_data.append({"Ticker": sym, "Kauflimit": limit})
+
+    st.write("Ändere dein Kauflimit direkt in der Tabelle:")
+    edited_df = st.data_editor(
+        edited_data,
+        num_rows="dynamic", # Erlaubt auch das Hinzufügen/Löschen von Zeilen
+        key="watchlist_editor"
+    )
+
+    # Aktualisiert die Session-Daten, wenn in der Tabelle etwas geändert wird
+    if edited_df:
+        new_dict = {}
+        for row in edited_df:
+            if row.get("Ticker"):
+                new_dict[row["Ticker"].upper().strip()] = float(row.get("Kauflimit", 0))
+        st.session_state.watchlist_data = new_dict
+
+    st.divider()
+
+    if st.button("🔄 Kurse & Signale prüfen", type="primary"):
         alerts_triggered = []
         rows = []
 
@@ -143,12 +160,11 @@ with tab2:
                 curr = i.get("currency", "EUR")
                 curr_sym = "$" if curr == "USD" else "€" if curr == "EUR" else curr
                 
-                # Check ob Preis unter oder gleich dem Zielpreis liegt
                 diff_pct = ((p - target_price) / target_price) * 100 if target_price > 0 else 0
                 
                 if p <= target_price and target_price > 0:
                     status = "🚨 ZIELPREIS ERREICHT!"
-                    alerts_triggered.append(f"**{sym}** ({i.get('shortName', sym)}): Aktueller Kurs **{p:.2f} {curr_sym}** liegt unter deinem Limit von **{target_price:.2f} {curr_sym}**!")
+                    alerts_triggered.append(f"**{sym}**: Kurs ({p:.2f} {curr_sym}) unter Limit ({target_price:.2f} {curr_sym})!")
                 else:
                     status = f"⏳ Noch {diff_pct:.1f} % entfernt"
 
@@ -159,10 +175,9 @@ with tab2:
                     "Dein Kauflimit": f"{target_price:.2f} {curr_sym}",
                     "Status / Signal": status
                 })
-            except Exception as e:
-                rows.append({"Ticker": sym, "Name": "Fehler beim Laden", "Aktueller Kurs": "-", "Dein Kauflimit": f"{target_price:.2f}", "Status / Signal": "Fehler"})
+            except:
+                rows.append({"Ticker": sym, "Name": "Fehler", "Aktueller Kurs": "-", "Dein Kauflimit": f"{target_price:.2f}", "Status / Signal": "Fehler"})
 
-        # Benachrichtigung ausgeben, falls Kauflimits erreicht wurden
         if alerts_triggered:
             for alert in alerts_triggered:
                 st.success(f"🎯 **KAUFSIGNAL:** {alert}")
