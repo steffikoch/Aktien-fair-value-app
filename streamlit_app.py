@@ -29,7 +29,7 @@ def search_ticker(query):
     return clean_query.upper()
 
 # =============================================================
-# HELPER: BERECHNUNGS-ENGINE (4-SCORE & METRIKEN)
+# HELPER: BERECHNUNGS-ENGINE (4-SCORE & METRIKEN & SZENARIEN)
 # =============================================================
 def analyze_stock_full(symbol, shares_count=0.0, buy_price=0.0, total_portfolio_val=65000.0, max_weight_limit=10.0, tax_free_allowance=1000.0):
     try:
@@ -50,15 +50,17 @@ def analyze_stock_full(symbol, shares_count=0.0, buy_price=0.0, total_portfolio_
 
         net_margin = (info.get('profitMargins') or 0.0) * 100
         roe = (info.get('returnOnEquity') or 0.0) * 100
-        fcf = info.get('freeCashflow')
+        fcf = info.get('freeCashflow') or 0
         eps_growth = (info.get('earningsGrowth') or 0.0) * 100
         rev_growth = (info.get('revenueGrowth') or 0.0) * 100
-        beta = info.get('beta')
+        beta = info.get('beta') or 1.0
         total_cash = info.get('totalCash', 0) or 0
         total_debt = info.get('totalDebt', 0) or 0
         shares_out = info.get('sharesOutstanding', 0) or 0
         eps = info.get('forwardEps') or info.get('trailingEps') or 0.0
         ebitda = info.get('ebitda', 0) or 0
+        pe_ratio = info.get('trailingPE') or info.get('forwardPE') or 0.0
+        sector = info.get('sector', 'Unbekannt')
         
         net_cash_ps = ((total_cash - total_debt) / shares_out) if shares_out > 0 else 0.0
         medium_term_growth = (eps_growth * 0.6) + (rev_growth * 0.4)
@@ -71,59 +73,68 @@ def analyze_stock_full(symbol, shares_count=0.0, buy_price=0.0, total_portfolio_
         if net_cash_ps > 0: b_score = 20
         else:
             debt_to_ebitda = (total_debt / ebitda) if ebitda > 0 else 99
-            b_score = 15 if debt_to_ebitda < 3.0 else (10 if debt_to_ebitda < 5.0 and fcf and fcf > 0 else 4)
+            b_score = 15 if debt_to_ebitda < 3.0 else (10 if debt_to_ebitda < 5.0 and fcf > 0 else 4)
 
-        c_score = 20 if fcf and fcf > 0 else (10 if fcf == 0 or fcf is None else 0)
-        r_score = 15 if beta and beta < 1.0 else (9 if beta and beta < 1.3 else 3)
+        c_score = 20 if fcf > 0 else 0
+        r_score = 15 if beta < 1.0 else (9 if beta < 1.3 else 3)
         quality_score = min(100, p_score + g_score + b_score + c_score + r_score)
 
-        # 2. Fair Value
-        target_pe = min(22.0, max(11.0, 12.0 + (max(0, medium_term_growth) * 0.4)))
-        fv_vals = []
-        if eps > 0: fv_vals.append((eps * target_pe) + max(0, net_cash_ps))
-        if fcf and shares_out > 0 and fcf > 0: fv_vals.append(((fcf / shares_out) * target_pe) + max(0, net_cash_ps))
+        # 2. Fair Value & Bear/Base/Bull Szenarien
+        target_pe_base = min(22.0, max(11.0, 12.0 + (max(0, medium_term_growth) * 0.4)))
         
-        fair_value = np.mean(fv_vals) if fv_vals else price
-        mos = ((fair_value - price) / price) * 100 if fair_value > 0 else 0.0
+        def calc_fv(pe_mult):
+            vals = []
+            if eps > 0: vals.append((eps * pe_mult) + max(0, net_cash_ps))
+            if fcf > 0 and shares_out > 0: vals.append(((fcf / shares_out) * pe_mult) + max(0, net_cash_ps))
+            return np.mean(vals) if vals else price
+
+        fv_base = calc_fv(target_pe_base)
+        fv_bear = calc_fv(target_pe_base * 0.75)
+        fv_bull = calc_fv(target_pe_base * 1.25)
+        
+        mos = ((fv_base - price) / price) * 100 if fv_base > 0 else 0.0
+        
+        # Confidence Level
+        confidence = "Hoch" if quality_score >= 75 and eps > 0 and fcf > 0 else ("Mittel" if quality_score >= 55 else "Niedrig")
 
         # 3. Netto-Rendite
         raw_div_yield = info.get('dividendYield') or 0.0
         div_yield_gross = raw_div_yield if raw_div_yield > 1.0 else raw_div_yield * 100.0
-        cap_gain_5y_gross = (((fair_value / price) ** (1 / 5) - 1) * 100) if (price > 0 and fair_value > price) else 0.0
+        
+        cap_gain_3y_gross = (((fv_base / price) ** (1 / 3) - 1) * 100) if (price > 0 and fv_base > price) else 0.0
+        cap_gain_5y_gross = (((fv_base / price) ** (1 / 5) - 1) * 100) if (price > 0 and fv_base > price) else 0.0
         
         gross_annual_income = (current_position_val * (div_yield_gross / 100.0)) + (current_position_val * (cap_gain_5y_gross / 100.0)) if current_position_val > 0 else (price * (div_yield_gross / 100.0))
         
         TAX_RATE = 0.26375
         if gross_annual_income <= tax_free_allowance:
-            net_div_yield = div_yield_gross
-            net_cap_gain_5y = cap_gain_5y_gross
+            net_div = div_yield_gross
+            net_cg_3y = cap_gain_3y_gross
+            net_cg_5y = cap_gain_5y_gross
         else:
             taxable_ratio = (gross_annual_income - tax_free_allowance) / gross_annual_income if gross_annual_income > 0 else 1.0
-            effective_tax_rate = TAX_RATE * taxable_ratio
-            net_div_yield = div_yield_gross * (1.0 - effective_tax_rate)
-            net_cap_gain_5y = cap_gain_5y_gross * (1.0 - effective_tax_rate)
+            eff_tax = TAX_RATE * taxable_ratio
+            net_div = div_yield_gross * (1.0 - eff_tax)
+            net_cg_3y = cap_gain_3y_gross * (1.0 - eff_tax)
+            net_cg_5y = cap_gain_5y_gross * (1.0 - eff_tax)
 
-        ret_5y_no_drip = net_cap_gain_5y + net_div_yield
+        ret_3y_net = net_cg_3y + net_div
+        ret_5y_net = net_cg_5y + net_div
+
+        # Kauflimit (z.B. Fair Value abzüglich 10% Sicherheitsmarge)
+        buy_limit = fv_base * 0.90
 
         # 4. Depot-Allokation
         weight_pct = (current_position_val / total_portfolio_val * 100) if total_portfolio_val > 0 else 0.0
         max_allowed_val = (max_weight_limit / 100.0) * total_portfolio_val
         remaining_cap_eur = max(0.0, max_allowed_val - current_position_val)
 
-        if weight_pct >= max_weight_limit:
-            action = f"🔴 SPERRE ({weight_pct:.1f}%)"
-        elif weight_pct >= 8.0:
-            action = f"🟠 KLEINER NACHKAUF ({weight_pct:.1f}%)"
-        elif weight_pct >= 6.0:
-            action = f"🟡 GEDROSSELT ({weight_pct:.1f}%)"
-        else:
-            action = f"🟢 KAUF MÖGLICH ({weight_pct:.1f}%)"
-
         pnl_str = f"{'+' if pnl_eur >= 0 else ''}{pnl_eur:,.2f} € ({'+' if pnl_pct >= 0 else ''}{pnl_pct:.2f}%)"
 
         return {
             "Ticker": symbol,
             "Name": info.get('shortName', symbol),
+            "Sector": sector,
             "Stückzahl": f"{shares_count:,.2f}",
             "Kaufkurs": f"{buy_price:.2f} {curr_sym}",
             "Akt. Kurs": f"{price:.2f} {curr_sym}",
@@ -131,14 +142,21 @@ def analyze_stock_full(symbol, shares_count=0.0, buy_price=0.0, total_portfolio_
             "Einstand (€)": f"{cost_basis:,.2f} €",
             "Akt. Wert (€)": f"{current_position_val:,.2f} €",
             "G&V Total": pnl_str,
-            "Fair Value": f"{fair_value:.2f} {curr_sym}",
+            "Fair Value": f"{fv_base:.2f} {curr_sym}",
+            "FV Bear": f"{fv_bear:.2f} {curr_sym}",
+            "FV Bull": f"{fv_bull:.2f} {curr_sym}",
+            "Confidence": confidence,
             "Puffer": f"{mos:+.1f} %",
             "Quality": f"{quality_score}/100",
             "raw_quality": quality_score,
-            "Opt. Rendite": f"{ret_5y_no_drip:.2f} %",
+            "KGV": f"{pe_ratio:.1f}" if pe_ratio > 0 else "-",
+            "FCF": f"{fcf / 1e6:,.1f} M. {curr_sym}" if fcf != 0 else "-",
+            "Beta": f"{beta:.2f}",
+            "Kauflimit": f"{buy_limit:.2f} {curr_sym}",
+            "Netto-Rendite 3J": f"{ret_3y_net:.2f} % p.a.",
+            "Netto-Rendite 5J": f"{ret_5y_net:.2f} % p.a.",
             "Gewicht": f"{weight_pct:.1f} %",
             "Freie Kap. (€)": f"{remaining_cap_eur:,.2f} €",
-            "Status": action,
             "raw_cost_basis": cost_basis,
             "raw_current_val": current_position_val,
             "raw_pnl": pnl_eur
@@ -171,8 +189,8 @@ if "portfolio" not in st.session_state:
 # TAB-NAVIGATION: DREI MODI
 tab_a, tab_b, tab_c = st.tabs([
     "🟢 A. Einzelaktie (Quick-Check)", 
-    "🔵 B. Reales Depot (G&V & Allokation)", 
-    "🟠 C. Kaufsimulation (Fit-Test)"
+    "🔵 B. Reales Depot (Bestand & G&V)", 
+    "🟠 C. Kaufsimulation (Portfolio Fit)"
 ])
 
 # =============================================================
@@ -180,35 +198,50 @@ tab_a, tab_b, tab_c = st.tabs([
 # =============================================================
 with tab_a:
     st.subheader("🟢 A. Einzelaktien-Analyse")
-    st.caption("Ist die Aktie gut und günstig? (Unabhängig von deinen Depot-Beständen)")
+    st.info("ℹ️ **Hinweis:** Depotdaten werden bei diesem Check **nicht** berücksichtigt. Reines Bewertungstool.")
     
-    query_a = st.text_input("Aktie oder Ticker eingeben (z. B. COCO, Münchener Rück, AAPL):", key="search_a").strip()
+    query_a = st.text_input("Aktie oder Ticker eingeben (z. B. COCO, DTE.DE, AAPL, Münchener Rück):", key="search_a").strip()
     
     if query_a:
-        with st.spinner("Analysiere Daten..."):
+        with st.spinner("Analysiere Einzelwert..."):
             resolved_a = search_ticker(query_a)
             res_a = analyze_stock_full(resolved_a, shares_count=0, buy_price=0, total_portfolio_val=depot_val_input, tax_free_allowance=tax_allowance_input)
             
             if res_a:
-                st.markdown(f"### {res_a['Name']} (`{res_a['Ticker']}`)")
-                col1, col2, col3, col4 = st.columns(4)
-                col1.metric("Aktueller Kurs", res_a["Akt. Kurs"])
-                col2.metric("Fairer Wert", res_a["Fair Value"], delta=res_a["Puffer"])
-                col3.metric("Quality Score", res_a["Quality"])
-                col4.metric("Opt. Netto-Rendite (p.a.)", res_a["Opt. Rendite"])
+                st.markdown(f"### {res_a['Name']} (`{res_a['Ticker']}`) – Sector: {res_a['Sector']}")
+                
+                m1, m2, m3, m4 = st.columns(4)
+                m1.metric("Aktueller Kurs", res_a["Akt. Kurs"])
+                m2.metric("Fair Value (Base)", res_a["Fair Value"], delta=res_a["Puffer"])
+                m3.metric("Quality Score", res_a["Quality"])
+                m4.metric("Empf. Kauflimit (-10%)", res_a["Kauflimit"])
                 
                 st.divider()
-                st.success(f"**Fazit:** Fairer Wert liegt bei **{res_a['Fair Value']}** (Sicherheitsmarge: **{res_a['Puffer']}**). Quality Score: **{res_a['Quality']}**.")
+                st.markdown("#### 🎯 Bewertung & Szenarien")
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("Bear-Case Fair Value", res_a["FV Bear"])
+                c2.metric("Base-Case Fair Value", res_a["Fair Value"])
+                c3.metric("Bull-Case Fair Value", res_a["FV Bull"])
+                c4.metric("FV Confidence Level", res_a["Confidence"])
+                
+                st.divider()
+                st.markdown("#### 📊 Kennzahlen & Rendite-Erwartung")
+                k1, k2, k3, k4, k5 = st.columns(5)
+                k1.metric("KGV", res_a["KGV"])
+                k2.metric("Free Cashflow", res_a["FCF"])
+                k3.metric("Risiko (Beta)", res_a["Beta"])
+                k4.metric("Netto-Rendite 3J p.a.", res_a["Netto-Rendite 3J"])
+                k5.metric("Netto-Rendite 5J p.a.", res_a["Netto-Rendite 5J"])
             else:
-                st.error("Aktie konnte nicht gefunden oder analysiert werden.")
+                st.error("Aktie konnte nicht gefunden werden.")
 
 # =============================================================
 # TAB B: REALES DEPOT
 # =============================================================
 with tab_b:
     st.subheader("🔵 B. Reales Depot & Bestandsübersicht")
+    st.caption("Verwaltung und Überwachung deiner tatsächlich gehaltenen Positionen.")
     
-    # Sidebar Erweiterung für Depot-Verwaltung
     with st.sidebar:
         st.markdown("---")
         st.subheader("➕ Aktie im Depot verwalten")
@@ -247,10 +280,9 @@ with tab_b:
     if results_b:
         df_b = pd.DataFrame(results_b)
         display_cols = [
-            "Ticker", "Name", "Stückzahl", "Kaufkurs", "Akt. Kurs", 
+            "Ticker", "Name", "Sector", "Stückzahl", "Kaufkurs", "Akt. Kurs", 
             "Einstand (€)", "Akt. Wert (€)", "G&V Total", 
-            "Fair Value", "Quality", "Opt. Rendite", 
-            "Gewicht", "Freie Kap. (€)", "Status"
+            "Fair Value", "Quality", "Gewicht", "Freie Kap. (€)"
         ]
         st.dataframe(df_b[display_cols], use_container_width=True)
         
@@ -262,7 +294,6 @@ with tab_b:
         allocated_pct = (total_current_val / depot_val_input) * 100
         cash_left = max(0.0, depot_val_input - total_current_val)
         
-        # Euro-Berechnungen für Zielkorridor
         min_target_eur = (target_stock_quote_min / 100.0) * depot_val_input
         max_target_eur = (target_stock_quote_max / 100.0) * depot_val_input
         
@@ -291,7 +322,6 @@ with tab_b:
             q_col3.success(f"🟢 Quote optimal: {allocated_pct:.1f}%")
         else:
             q_col3.warning(f"🔴 Quote überschritten: {allocated_pct:.1f}%")
-
     else:
         st.info("Keine Aktien im Portfolio.")
 
@@ -300,7 +330,7 @@ with tab_b:
 # =============================================================
 with tab_c:
     st.subheader("🟠 C. Kaufsimulation & Portfolio Fit")
-    st.caption("Was passiert mit deinen Quoten, wenn du eine bestimmte Summe investierst?")
+    st.info("ℹ️ **Hinweis:** Depotdaten werden hier **vollständig** berücksichtigt. Bewertet Auswirkungen auf Quoten und Limits.")
     
     sim_col1, sim_col2 = st.columns(2)
     with sim_col1:
@@ -313,47 +343,76 @@ with tab_c:
         sim_data = analyze_stock_full(sim_ticker, shares_count=0, buy_price=0, total_portfolio_val=depot_val_input, tax_free_allowance=tax_allowance_input)
         
         if sim_data:
-            # Berechnungen Vorher / Nachher
             current_stock_val = sum([x["raw_current_val"] for x in results_b]) if 'results_b' in locals() and results_b else 0.0
             
+            # Prüfen, ob Aktie bereits im Depot ist
+            existing_pos_val = 0.0
+            if 'results_b' in locals() and results_b:
+                for item in results_b:
+                    if item["Ticker"] == sim_data["Ticker"]:
+                        existing_pos_val = item["raw_current_val"]
+                        break
+
             quote_before = (current_stock_val / depot_val_input) * 100
             new_stock_val = current_stock_val + sim_amount
             quote_after = (new_stock_val / depot_val_input) * 100
             
-            position_weight = (sim_amount / depot_val_input) * 100
+            new_total_pos_val = existing_pos_val + sim_amount
+            new_pos_weight = (new_total_pos_val / depot_val_input) * 100
             
             max_target_eur = (target_stock_quote_max / 100.0) * depot_val_input
-            spielraum_after = max(0.0, max_target_eur - new_stock_val)
+            spielraum_quote_after = max(0.0, max_target_eur - new_stock_val)
+            
+            max_pos_eur = (limit_pct_input / 100.0) * depot_val_input
+            spielraum_pos_after = max(0.0, max_pos_eur - new_total_pos_val)
             
             st.divider()
             st.markdown(f"### Simulation: Kauf von **{sim_amount:,.2f} €** in `{sim_data['Ticker']}` ({sim_data['Name']})")
             
-            m1, m2, m3, m4 = st.columns(4)
-            m1.metric("Aktienquote vorher", f"{quote_before:.1f} %")
-            m2.metric("Aktienquote nach Kauf", f"{quote_after:.1f} %", delta=f"+{quote_after - quote_before:.1f} %")
-            m3.metric("Positionsgewicht", f"{position_weight:.1f} %", delta="OK" if position_weight <= limit_pct_input else "Über Limit!", delta_color="normal" if position_weight <= limit_pct_input else "inverse")
-            m4.metric("Verbleibender Spielraum (20 %)", f"{spielraum_after:,.2f} €")
+            s1, s2, s3, s4 = st.columns(4)
+            s1.metric("Aktienquote Vorher ➔ Nachher", f"{quote_before:.1f} % ➔ {quote_after:.1f} %")
+            s2.metric("Positionsgewicht Nachher", f"{new_pos_weight:.1f} %", delta=f"Limit: {limit_pct_input:.1f}%")
+            s3.metric("Verbl. Quoten-Spielraum (20%)", f"{spielraum_quote_after:,.2f} €")
+            s4.metric("Verbl. Positions-Spielraum", f"{spielraum_pos_after:,.2f} €")
             
-            # Portfolio-Fit Bewertung
-            st.markdown("#### 🎯 Portfolio Fit Bewertung")
+            st.divider()
+            st.markdown("#### 🎯 Portfolio Fit & Handlungsempfehlung")
             
-            fit_checks = []
-            if position_weight <= limit_pct_input:
-                fit_checks.append("✅ Positionsgröße liegt unter dem 10 % Einzelwert-Limit.")
+            fit_ok = True
+            reasons = []
+            
+            # Quality Check
+            if sim_data["raw_quality"] >= 70:
+                reasons.append(f"🟢 **Qualität:** Hoch ({sim_data['Quality']})")
+            elif sim_data["raw_quality"] >= 50:
+                reasons.append(f"🟡 **Qualität:** Mittel ({sim_data['Quality']})")
             else:
-                fit_checks.append("❌ Position würde das 10 % Einzelwert-Limit überschreiten!")
+                reasons.append(f"🔴 **Qualität:** Schwach ({sim_data['Quality']})")
+                fit_ok = False
                 
+            # Positionslimit Check
+            if new_pos_weight <= limit_pct_input:
+                reasons.append(f"🟢 **Positionslimit:** Passt ({new_pos_weight:.1f} % / Max {limit_pct_input:.1f} %)")
+            else:
+                reasons.append(f"🔴 **Positionslimit:** Überschritten ({new_pos_weight:.1f} % > {limit_pct_input:.1f} %)")
+                fit_ok = False
+                
+            # Quotenlimit Check
             if quote_after <= target_stock_quote_max:
-                fit_checks.append("✅ Die Gesamte Aktienquote bleibt innerhalb des 20 % Zielkorridors.")
+                reasons.append(f"🟢 **Gesamte Aktienquote:** Passt ({quote_after:.1f} % / Max {target_stock_quote_max:.1f} %)")
             else:
-                fit_checks.append("❌ Die Gesamte Aktienquote würde den 20 % Zielkorridor überschreiten!")
-                
-            if sim_data["raw_quality"] >= 60:
-                fit_checks.append(f"✅ Hohe Qualität (Quality Score: {sim_data['Quality']}).")
-            else:
-                fit_checks.append(f"⚠️ Mäßige Qualität (Quality Score: {sim_data['Quality']}).")
+                reasons.append(f"🔴 **Gesamte Aktienquote:** Überschritten ({quote_after:.1f} % > {target_stock_quote_max:.1f} %)")
+                fit_ok = False
 
-            for check in fit_checks:
-                st.write(check)
+            # Gesamtfazit
+            if fit_ok:
+                st.success("### 🟢 KAUF PASST INS DEPOT")
+            elif new_pos_weight > limit_pct_input or quote_after > target_stock_quote_max:
+                st.error("### 🔴 KAUF NICHT EMPFOHLEN (Limit-Überschreitung)")
+            else:
+                st.warning("### 🟡 KAUF GEDROSSELT EMPFOHLEN")
+
+            for r in reasons:
+                st.markdown(r)
         else:
             st.error("Simulations-Aktie konnte nicht geladen werden.")
