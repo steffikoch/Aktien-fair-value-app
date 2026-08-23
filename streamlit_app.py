@@ -7,12 +7,12 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-# Die exakten 3 Reiter oben nebeneinander
+# Kürzerer Text für die Tabs, damit sie auf dem Handy perfekt nebeneinander passen
 tab_a, tab_b, tab_c = st.tabs(
     [
-        "🔍 Tab A: Aktien-Analyse",
-        "📊 Tab B: Depot-Verwaltung",
-        "🎯 Tab C: Kauf-Simulation & Tranchen",
+        "🔍 Analyse",
+        "📊 Depot",
+        "🎯 Simulation",
     ]
 )
 
@@ -62,19 +62,25 @@ with tab_b:
                     "Sektor": "Finanzen",
                     "Stückzahl": 188,
                     "Kurs (€)": 43.73,
-                }
+                },
+                {
+                    "Name": "Münchener Rückversicherung",
+                    "Sektor": "Finanzen",
+                    "Stückzahl": 10,
+                    "Kurs (€)": 450.0,
+                },
             ]
         )
 
     col_btn1, col_btn2 = st.columns(2)
     with col_btn1:
-        if st.button("🗑️ Depot leeren", use_container_width=True):
+        if st.button("🗑️ Leeren", use_container_width=True):
             st.session_state.depot_df = pd.DataFrame(
                 columns=["Name", "Sektor", "Stückzahl", "Kurs (€)"]
             )
             st.rerun()
     with col_btn2:
-        if st.button("🔄 Standard laden", use_container_width=True):
+        if st.button("🔄 Standard", use_container_width=True):
             st.session_state.depot_df = pd.DataFrame(
                 [
                     {
@@ -82,7 +88,13 @@ with tab_b:
                         "Sektor": "Finanzen",
                         "Stückzahl": 188,
                         "Kurs (€)": 43.73,
-                    }
+                    },
+                    {
+                        "Name": "Münchener Rückversicherung",
+                        "Sektor": "Finanzen",
+                        "Stückzahl": 10,
+                        "Kurs (€)": 450.0,
+                    },
                 ]
             )
             st.rerun()
@@ -103,7 +115,7 @@ with tab_b:
 
     cash_reserve = st.number_input(
         "Verfügbares Cash / Puffer (€):",
-        value=25000.0,
+        value=0.0,
         step=1000.0,
         key="depot_cash",
     )
@@ -123,13 +135,44 @@ with tab_c:
     st.subheader("Depot-Integration & Kaufgrößen-Prüfung")
 
     sim_aktie = st.selectbox(
-        "Zu simulierende Aktie:", ["AXA", "Allianz", "Apple", "Telekom"]
+        "Zu simulierende Aktie:",
+        ["Allianz", "AXA", "Apple", "Telekom"],
+        key="c_aktie",
     )
     geplante_summe = st.number_input(
-        "Geplante Kaufsumme (€):", value=1000.0, step=100.0
+        "Geplante Kaufsumme (€):", value=1000.0, step=100.0, key="c_summe"
     )
 
+    # Sektor-Zuordnung für die Simulations-Aktien
+    sektor_mapping = {
+        "Allianz": "Finanzen",
+        "AXA": "Finanzen",
+        "Apple": "Technologie",
+        "Telekom": "Telekommunikation"
+    }
+    sim_sektor = sektor_mapping.get(sim_aktie, "Sonstige")
+
+    # Zählen, wie oft dieser Sektor im Depot (Tab B) bereits vorkommt
+    sektor_zaehler = 0
+    if "depot_df" in st.session_state and not st.session_state.depot_df.empty:
+        sektor_filter = st.session_state.depot_df["Sektor"].astype(str).str.lower() == sim_sektor.lower()
+        sektor_zaehler = sektor_filter.sum()
+
     st.markdown("---")
-    st.markdown(f"**Simulation für {sim_aktie}:**")
+    st.markdown(f"**Simulation für {sim_aktie} (Sektor: {sim_sektor}):**")
     st.metric(label="Investitionssumme", value=f"{geplante_summe:,.2f} €")
-    st.success("✅ Kaufgröße im Rahmen der gewählten Tranchen-Limits.")
+
+    # Definition des Limits pro Sektor (hier max. 2)
+    MAX_SEKTOR_LIMIT = 2
+
+    if sektor_zaehler >= MAX_SEKTOR_LIMIT:
+        st.error(
+            f"❌ Fehlgeschlagen: Es befinden sich bereits {sektor_zaehler} Werte "
+            f"aus dem Sektor '{sim_sektor}' im Depot (Limit: {MAX_SEKTOR_LIMIT}). "
+            "Kein weiterer Kauf möglich (Klumpenrisiko)!"
+        )
+    else:
+        st.success(
+            f"✅ Kaufgröße im Rahmen der gewählten Tranchen-Limits "
+            f"(Sektor-Anteil: {sektor_zaehler}/{MAX_SEKTOR_LIMIT})."
+        )
