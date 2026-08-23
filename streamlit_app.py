@@ -8,7 +8,7 @@ import requests
 st.set_page_config(page_title="Depot-Steuerungs-Engine", layout="wide", page_icon="📈")
 
 st.title("📈 Depot-Steuerungs-Engine")
-st.caption("Depotvergleich – 65.000 € Basis | 10 % Einzelpositionslimit | 1.000 € Sparer-Pauschbetrag")
+st.caption("Depotvergleich – 65.000 € Basis | 10 % Einzelposition | 25 % Sektorlimit | 1.000 € Sparer-Pauschbetrag")
 
 # =============================================================
 # HELPER: AUTOMATISCHE TICKER-SUCHE
@@ -29,7 +29,7 @@ def search_ticker(query):
     return clean_query.upper()
 
 # =============================================================
-# HELPER: BERECHNUNGS-ENGINE (MIT FINANZWERT- & RENDITE-SENSITIVITÄT)
+# HELPER: BERECHNUNGS-ENGINE (SEKTOR-, FINANZWERT- & PLAUSIBILITÄTS-ANALYSE)
 # =============================================================
 def analyze_stock_full(symbol, shares_count=0.0, buy_price=0.0, total_portfolio_val=65000.0, max_weight_limit=10.0, tax_free_allowance=1000.0):
     try:
@@ -73,8 +73,8 @@ def analyze_stock_full(symbol, shares_count=0.0, buy_price=0.0, total_portfolio_
         g_score = 20 if medium_term_growth >= 12.0 else (13 if medium_term_growth >= 5.0 else (7 if medium_term_growth >= 0.0 else 2))
         
         if is_financial:
-            b_score = 20  # Eigenkapital/Bilanz über ROE & Aufsicht abgedeckt
-            c_score = 20  # FCF bei Versicherungen/Banken nicht repräsentativ
+            b_score = 20  # Bilanzstruktur über ROE & Regulierung abgedeckt
+            c_score = 20  # FCF nicht repräsentativ bei Finanzwerten
         else:
             if net_cash_ps > 0: 
                 b_score = 20
@@ -115,7 +115,7 @@ def analyze_stock_full(symbol, shares_count=0.0, buy_price=0.0, total_portfolio_
         cap_gain_3y_gross = (((fv_base / price) ** (1 / 3) - 1) * 100) if (price > 0 and fv_base > price) else 0.0
         cap_gain_5y_gross = (((fv_base / price) ** (1 / 5) - 1) * 100) if (price > 0 and fv_base > price) else 0.0
         
-        # Fair Value Realisierungsanteil (Wie viel der Rendite kommt rein durch Neubewertung?)
+        # Fair Value Realisierungsanteil (Wie viel der Rendite stammt aus Neubewertung?)
         revaluation_gain_total = max(0.0, ((fv_base - price) / price) * 100)
         revaluation_p_a_3y = (((1 + revaluation_gain_total / 100) ** (1 / 3)) - 1) * 100 if revaluation_gain_total > 0 else 0.0
         
@@ -187,6 +187,7 @@ def analyze_stock_full(symbol, shares_count=0.0, buy_price=0.0, total_portfolio_
             "FV Bull": f"{fv_bull:.2f} {curr_sym}",
             "Confidence": confidence,
             "Puffer": f"{mos:+.1f} %",
+            "raw_mos": mos,
             "Quality": f"{quality_score}/100",
             "raw_quality": quality_score,
             "KGV": f"{pe_ratio:.1f}" if pe_ratio > 0 else "-",
@@ -214,7 +215,8 @@ def analyze_stock_full(symbol, shares_count=0.0, buy_price=0.0, total_portfolio_
 # =============================================================
 st.sidebar.header("⚙️ Depot-Konfiguration")
 depot_val_input = st.sidebar.number_input("Gesamtdepot-Wert (€):", min_value=1.0, value=65000.0, step=1000.0)
-limit_pct_input = st.sidebar.number_input("Max. Gewicht pro Aktie (%):", min_value=1.0, max_value=50.0, value=10.0, step=0.5)
+limit_pct_input = st.sidebar.number_input("Max. Einzelposition (%):", min_value=1.0, max_value=50.0, value=10.0, step=0.5)
+sector_limit_pct_input = st.sidebar.number_input("Max. Sektorgewicht (%):", min_value=1.0, max_value=100.0, value=25.0, step=1.0)
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("🎯 Aktienquote Zielbereich")
@@ -241,7 +243,7 @@ tab_a, tab_b, tab_c = st.tabs([
 # =============================================================
 with tab_a:
     st.subheader("🟢 A. Einzelaktien-Analyse")
-    st.info("ℹ️ **Hinweis:** Depotdaten werden bei diesem Check **nicht** berücksichtigt. Fundamentalanalyse – unabhängig vom Depot.")
+    st.info("ℹ️ **Hinweis:** Depotdaten werden bei diesem Check **nicht** berücksichtigt. Reine Fundamentalanalyse.")
     
     query_a = st.text_input("Aktie oder Ticker eingeben (z. B. CS.PA / AXA, COCO, DTE.DE, AAPL, MUV2.DE):", key="search_a").strip()
     
@@ -251,9 +253,8 @@ with tab_a:
             res_a = analyze_stock_full(resolved_a, shares_count=0, buy_price=0, total_portfolio_val=depot_val_input, tax_free_allowance=tax_allowance_input)
             
             if res_a:
-                st.markdown(f"### {res_a['Name']} (`{res_a['Ticker']}`) – Sektor: {res_a['Sector']}")
+                st.markdown(f"### {res_a['Name']} (`{res_a['Ticker']}`) – Sektor: **{res_a['Sector']}**")
                 
-                # URTEIL & PLAUSIBILITÄTS-CHECK ANZEIGE
                 st.markdown(f"### Urteil: **{res_a['Signal_Judgment']}**")
                 
                 st.markdown("#### 🔍 Plausibilitäts-Check & Modell-Status")
@@ -385,17 +386,17 @@ with tab_b:
         st.info("Keine Aktien im Portfolio.")
 
 # =============================================================
-# TAB C: KAUFSIMULATION
+# TAB C: KAUFSIMULATION & PORTFOLIO FIT
 # =============================================================
 with tab_c:
     st.subheader("🟠 C. Kaufsimulation & Portfolio Fit")
-    st.info("ℹ️ **Hinweis:** Depotdaten werden hier **vollständig** berücksichtigt. Bewertet Auswirkungen auf Quoten und Limits.")
+    st.caption("Prüft den direkten Einfluss eines Kaufs auf Aktienquote, Einzelgewicht & Sektor-Klumpenrisiko.")
     
     sim_col1, sim_col2 = st.columns(2)
     with sim_col1:
         sim_query = st.text_input("Simulierte Aktie (Name oder Ticker):", value="CS.PA", key="sim_q").strip()
     with sim_col2:
-        sim_amount = st.number_input("Simulierter Kaufwert (€):", min_value=100.0, value=2500.0, step=250.0)
+        sim_amount = st.number_input("Simulierter Kaufwert (€):", min_value=100.0, value=1000.0, step=250.0)
         
     if sim_query and sim_amount > 0:
         sim_ticker = search_ticker(sim_query)
@@ -404,75 +405,118 @@ with tab_c:
         if sim_data:
             current_stock_val = sum([x["raw_current_val"] for x in results_b]) if 'results_b' in locals() and results_b else 0.0
             
+            # Bestehende Position & Sektor berechnen
             existing_pos_val = 0.0
+            existing_sector_val = 0.0
+            existing_sector_stocks = []
+            
             if 'results_b' in locals() and results_b:
                 for item in results_b:
                     if item["Ticker"] == sim_data["Ticker"]:
                         existing_pos_val = item["raw_current_val"]
-                        break
+                    if item["Sector"] == sim_data["Sector"]:
+                        existing_sector_val += item["raw_current_val"]
+                        existing_sector_stocks.append(item["Ticker"])
 
+            # Quoten nach Kauf
             quote_before = (current_stock_val / depot_val_input) * 100
             new_stock_val = current_stock_val + sim_amount
             quote_after = (new_stock_val / depot_val_input) * 100
             
+            # Position nach Kauf
             new_total_pos_val = existing_pos_val + sim_amount
             new_pos_weight = (new_total_pos_val / depot_val_input) * 100
             
+            # Sektor nach Kauf
+            new_sector_val = existing_sector_val + sim_amount
+            new_sector_weight = (new_sector_val / depot_val_input) * 100
+            sector_weight_before = (existing_sector_val / depot_val_input) * 100
+            
+            # Freie Spielräume
             max_target_eur = (target_stock_quote_max / 100.0) * depot_val_input
             spielraum_quote_after = max(0.0, max_target_eur - new_stock_val)
             
             max_pos_eur = (limit_pct_input / 100.0) * depot_val_input
             spielraum_pos_after = max(0.0, max_pos_eur - new_total_pos_val)
             
+            max_sector_eur = (sector_limit_pct_input / 100.0) * depot_val_input
+            spielraum_sector_after = max(0.0, max_sector_eur - new_sector_val)
+            
             st.divider()
             st.markdown(f"### Simulation: Kauf von **{sim_amount:,.2f} €** in `{sim_data['Ticker']}` ({sim_data['Name']})")
+            st.caption(f"Sektor: **{sim_data['Sector']}**")
             
             s1, s2, s3, s4 = st.columns(4)
-            s1.metric("Aktienquote Vorher ➔ Nachher", f"{quote_before:.1f} % ➔ {quote_after:.1f} %")
-            s2.metric("Positionsgewicht Nachher", f"{new_pos_weight:.1f} %", delta=f"Limit: {limit_pct_input:.1f}%")
-            s3.metric(f"Verbl. Quoten-Spielraum ({target_stock_quote_max}%)", f"{spielraum_quote_after:,.2f} €")
-            s4.metric("Verbl. Positions-Spielraum", f"{spielraum_pos_after:,.2f} €")
-            
+            s1.metric("Gesamte Aktienquote", f"{quote_before:.1f} % ➔ {quote_after:.1f} %", delta=f"Ziel: {target_stock_quote_max}%")
+            s2.metric("Positionsgewicht", f"{new_pos_weight:.1f} %", delta=f"Max: {limit_pct_input:.1f}%")
+            s3.metric(f"Sektorgewicht ({sim_data['Sector']})", f"{sector_weight_before:.1f} % ➔ {new_sector_weight:.1f} %", delta=f"Max: {sector_limit_pct_input:.1f}%")
+            s4.metric("Verbl. Quoten-Spielraum", f"{spielraum_quote_after:,.2f} €")
+
             st.divider()
-            st.markdown("#### 🎯 Portfolio Fit & Handlungsempfehlung")
-            
+            st.markdown("#### 🎯 8-Punkte-Checkliste (Portfolio Fit)")
+
+            # 8 PRÜFPUNKTE ERSTELLEN
             fit_ok = True
-            reasons = []
             
-            if sim_data["raw_quality"] >= 65:
-                reasons.append(f"🟢 **Qualität:** Ausreichend bis Hoch ({sim_data['Quality']})")
-            elif sim_data["raw_quality"] >= 50:
-                reasons.append(f"🟡 **Qualität:** Mittel ({sim_data['Quality']})")
-            else:
-                reasons.append(f"🔴 **Qualität:** Schwach ({sim_data['Quality']})")
-                fit_ok = False
-                
-            if new_pos_weight <= limit_pct_input:
-                reasons.append(f"🟢 **Positionslimit:** Passt ({new_pos_weight:.1f} % / Max {limit_pct_input:.1f} %)")
-            else:
-                reasons.append(f"🔴 **Positionslimit:** Überschritten ({new_pos_weight:.1f} % > {limit_pct_input:.1f} %)")
-                fit_ok = False
-                
-            if quote_after <= target_stock_quote_max:
-                reasons.append(f"🟢 **Gesamte Aktienquote:** Passt ({quote_after:.1f} % / Max {target_stock_quote_max:.1f} %)")
-            else:
-                reasons.append(f"🔴 **Gesamte Aktienquote:** Überschritten ({quote_after:.1f} % > {target_stock_quote_max:.1f} %)")
-                fit_ok = False
+            # 1. Bewertung
+            c_val = "🟢" if sim_data["raw_mos"] > 15 else ("🟡" if sim_data["raw_mos"] > 0 else "🔴")
+            check_val = f"{c_val} **1. Bewertung:** Fair Value Puffer {sim_data['Puffer']} ({sim_data['Fair Value']})"
+            
+            # 2. Qualität
+            c_qual = "🟢" if sim_data["raw_quality"] >= 65 else ("🟡" if sim_data["raw_quality"] >= 50 else "🔴")
+            check_qual = f"{c_qual} **2. Qualität:** Quality Score {sim_data['Quality']}"
+            if sim_data["raw_quality"] < 50: fit_ok = False
 
-            if "🟡" in sim_data["Plausibility_Status"] or "🔴" in sim_data["Plausibility_Status"]:
-                reasons.append(f"⚠️ **Modellhinweis:** {sim_data['Plausibility_Status']}")
+            # 3. Einzelposition
+            c_pos = "🟢" if new_pos_weight <= limit_pct_input else "🔴"
+            check_pos = f"{c_pos} **3. Einzelpositionsgewicht:** {new_pos_weight:.1f} % (Limit: {limit_pct_input:.1f} % | Spielraum: {spielraum_pos_after:,.2f} €)"
+            if new_pos_weight > limit_pct_input: fit_ok = False
 
+            # 4. Aktienquote
+            c_quote = "🟢" if quote_after <= target_stock_quote_max else "🔴"
+            check_quote = f"{c_quote} **4. Gesamte Aktienquote:** {quote_after:.1f} % (Max: {target_stock_quote_max:.1f} % | Spielraum: {spielraum_quote_after:,.2f} €)"
+            if quote_after > target_stock_quote_max: fit_ok = False
+
+            # 5. Sektorgewicht
+            c_sec = "🟢" if new_sector_weight <= sector_limit_pct_input else "🔴"
+            check_sec = f"{c_sec} **5. Sektorgewicht ({sim_data['Sector']}):** {new_sector_weight:.1f} % (Limit: {sector_limit_pct_input:.1f} % | Spielraum: {spielraum_sector_after:,.2f} €)"
+            if new_sector_weight > sector_limit_pct_input: fit_ok = False
+
+            # 6. Ähnliche Positionen im Sektor
+            if existing_sector_stocks:
+                check_sim = f"🟡 **6. Ähnliche Sektor-Positionen:** Bereit gehalten: {', '.join(existing_sector_stocks)} (Gesamt-Sektor: {new_sector_weight:.1f} %)"
+            else:
+                check_sim = f"🟢 **6. Ähnliche Sektor-Positionen:** Keine weiteren Werte im Sektor '{sim_data['Sector']}' im Depot."
+
+            # 7. Erwartete Rendite
+            c_ret = "🟢" if sim_data["raw_ret_3y"] >= 8.0 else "🟡"
+            check_ret = f"{c_ret} **7. Erwartete Rendite:** {sim_data['Netto-Rendite 3J']} (Neubewertungs-Anteil: {sim_data['Neubewertung_pa_3J']})"
+
+            # 8. Modellrisiko & Confidence
+            c_conf = "🟢" if sim_data["Confidence"] == "Hoch" else ("🟡" if sim_data["Confidence"] == "Mittel" else "🔴")
+            check_conf = f"{c_conf} **8. Modellrisiko & Confidence:** Level {sim_data['Confidence']} ({sim_data['Plausibility_Status']})"
+
+            # AUSGABE ENDURTEIL
             if fit_ok and "🔴" not in sim_data["Plausibility_Status"]:
-                if "🟡" in sim_data["Plausibility_Status"]:
-                    st.warning("### 🟡 KAUF MÖGLICH – MODELL MIT VORSICHT PRÜFEN")
+                if "🟡" in sim_data["Plausibility_Status"] or new_sector_weight > (sector_limit_pct_input * 0.8):
+                    st.warning("### 🟡 KAUF MÖGLICH – MODELL / SEKTOR MIT VORSICHT PRÜFEN")
                 else:
                     st.success("### 🟢 KAUF PASST OPTIMAL INS DEPOT")
-            elif new_pos_weight > limit_pct_input or quote_after > target_stock_quote_max:
-                st.error("### 🔴 KAUF NICHT EMPFOHLEN (Limit-Überschreitung)")
             else:
-                st.warning("### 🟡 KAUF GEDROSSELT EMPFOHLEN")
+                st.error("### 🔴 KAUF NICHT EMPFOHLEN (Limit- oder Sektor-Überschreitung)")
 
-            for r in reasons:
-                st.markdown(r)
+            # Prüfpunkte untereinander ausgeben
+            cols_check1, cols_check2 = st.columns(2)
+            with cols_check1:
+                st.markdown(check_val)
+                st.markdown(check_qual)
+                st.markdown(check_pos)
+                st.markdown(check_quote)
+            with cols_check2:
+                st.markdown(check_sec)
+                st.markdown(check_sim)
+                st.markdown(check_ret)
+                st.markdown(check_conf)
+
         else:
             st.error("Simulations-Aktie konnte nicht geladen werden.")
