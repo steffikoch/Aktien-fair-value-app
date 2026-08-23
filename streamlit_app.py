@@ -12,12 +12,12 @@ st.title("📈 Stock Valuation & Portfolio Capacity Engine")
 # INITIAL DATASETS
 # =========================================================
 def get_initial_portfolio():
-    return pd.DataFrame([
+    return [
         {"Ticker": "AAPL", "Name": "Apple Inc.", "Sector": "Technology", "Shares": 15.0, "Price_EUR": 210.00},
         {"Ticker": "MSFT", "Name": "Microsoft Corp.", "Sector": "Technology", "Shares": 8.0, "Price_EUR": 415.00},
         {"Ticker": "ALV.DE", "Name": "Allianz SE", "Sector": "Financial Services", "Shares": 20.0, "Price_EUR": 260.00},
         {"Ticker": "NOVN.SW", "Name": "Novartis AG", "Sector": "Healthcare", "Shares": 30.0, "Price_EUR": 92.00},
-    ])
+    ]
 
 @st.cache_data
 def load_mock_universe():
@@ -49,8 +49,9 @@ def load_mock_universe():
         }
     ])
 
+# Portfolio im Session State halten
 if "portfolio_list" not in st.session_state:
-    st.session_state.portfolio_list = get_initial_portfolio().to_dict('records')
+    st.session_state.portfolio_list = get_initial_portfolio()
 
 df_universe = load_mock_universe()
 
@@ -88,7 +89,7 @@ with tab_a:
     st.info(f"**Modell-Status:** {stock_data['Plausibility_Status']}")
 
 # ---------------------------------------------------------
-# TAB B: DEPOT-VERWALTUNG (MOBILE-OPTIMIERTES FORMULAR)
+# TAB B: DEPOT-VERWALTUNG (FEHLERFREIES SPEICHERN)
 # ---------------------------------------------------------
 with tab_b:
     st.header("Aktueller Depot-Status & Verwaltung")
@@ -113,7 +114,10 @@ with tab_b:
         form_ticker = st.text_input("Ticker Symbol:", value=default_ticker)
         form_name = st.text_input("Name der Aktie:", value=default_name)
         
-        sectors_list = sorted(list(set(df_universe["Sector"].tolist() + ["Technology", "Financial Services", "Healthcare", "Industrials", "Consumer Discretionary", "Energy", "Sonstige"])))
+        sectors_list = sorted(list(set(df_universe["Sector"].tolist() + [
+            "Technology", "Financial Services", "Healthcare", "Industrials", 
+            "Consumer Discretionary", "Energy", "Sonstige"
+        ])))
         sector_idx = sectors_list.index(default_sector) if default_sector in sectors_list else 0
         form_sector = st.selectbox("Sektor:", sectors_list, index=sector_idx)
         
@@ -122,16 +126,24 @@ with tab_b:
 
         if st.button("💾 Position im Depot speichern"):
             if form_ticker.strip() != "":
-                # Vorhandene Position überschreiben oder neue hinzufügen
-                st.session_state.portfolio_list = [p for p in st.session_state.portfolio_list if p["Ticker"] != form_ticker.strip()]
+                clean_ticker = form_ticker.strip().upper()
+                
+                # 1. Entferne vorherige Version der Aktie (falls bereits in der Liste), um Duplikate zu vermeiden
+                st.session_state.portfolio_list = [
+                    p for p in st.session_state.portfolio_list 
+                    if p["Ticker"].upper() != clean_ticker
+                ]
+                
+                # 2. Hänge die neue Aktie an die bestehende Liste an
                 st.session_state.portfolio_list.append({
-                    "Ticker": form_ticker.strip(),
+                    "Ticker": clean_ticker,
                     "Name": form_name.strip(),
                     "Sector": form_sector,
                     "Shares": float(form_shares),
                     "Price_EUR": float(form_price)
                 })
-                st.success(f"Position {form_ticker} gespeichert!")
+                
+                st.success(f"Position {clean_ticker} erfolgreich gespeichert!")
                 st.rerun()
 
     # --- LISTE DER BESTEHENDEN POSITIONEN ---
@@ -144,21 +156,24 @@ with tab_b:
             st.rerun()
     with col_b2:
         if st.button("🔄 Standard-Depot laden"):
-            st.session_state.portfolio_list = get_initial_portfolio().to_dict('records')
+            st.session_state.portfolio_list = get_initial_portfolio()
             st.rerun()
 
-    # Portfolio als DataFrame aufbereiten
+    # Berechnungen der Einzelwerte und Gesamtsummen
     if len(st.session_state.portfolio_list) > 0:
         df_portfolio = pd.DataFrame(st.session_state.portfolio_list)
         df_portfolio["Position_Value"] = df_portfolio["Shares"] * df_portfolio["Price_EUR"]
         total_stock_value = df_portfolio["Position_Value"].sum()
 
-        # Einzelne Positionen als Karten mit Löschen-Button anzeigen
+        # Liste der Positionen rendern
         for idx, item in enumerate(st.session_state.portfolio_list):
             pos_val = item["Shares"] * item["Price_EUR"]
             c1, c2 = st.columns([3, 1])
             with c1:
-                st.markdown(f"**{item['Ticker']}** ({item['Name']}) - *{item['Sector']}*  \n{item['Shares']:.0f} Stk. × {item['Price_EUR']:.2f} € = **{pos_val:,.2f} €**")
+                st.markdown(
+                    f"**{item['Ticker']}** ({item['Name']}) - *{item['Sector']}*  \n"
+                    f"{item['Shares']:.0f} Stk. × {item['Price_EUR']:.2f} € = **{pos_val:,.2f} €**"
+                )
             with c2:
                 if st.button("🗑️", key=f"del_{item['Ticker']}_{idx}"):
                     st.session_state.portfolio_list.pop(idx)
@@ -168,6 +183,7 @@ with tab_b:
         df_portfolio = pd.DataFrame(columns=["Ticker", "Name", "Sector", "Shares", "Price_EUR", "Position_Value"])
         total_stock_value = 0.0
 
+    # Gesamtdepotwert = Summe aller Aktienwerte + Cash aus Sidebar
     total_portfolio_value = total_stock_value + cash_balance
 
     st.divider()
