@@ -9,7 +9,7 @@ st.set_page_config(page_title="Portfolio & Valuation Engine", layout="wide")
 st.title("📈 Stock Valuation & Portfolio Capacity Engine")
 
 # =========================================================
-# INITIAL MOCK DATASETS
+# INITIAL DATASETS
 # =========================================================
 def get_initial_portfolio():
     return pd.DataFrame([
@@ -39,7 +39,7 @@ def load_mock_universe():
         }
     ])
 
-# Session State für interaktives Portfolio initialisieren
+# Session State für das Portfolio initialisieren
 if "portfolio_data" not in st.session_state:
     st.session_state.portfolio_data = get_initial_portfolio()
 
@@ -79,31 +79,59 @@ with tab_a:
     st.info(f"**Modell-Status:** {stock_data['Plausibility_Status']}")
 
 # ---------------------------------------------------------
-# TAB B: DEPOT-VERWALTUNG (INTERAKTIVER EDITOR)
+# TAB B: DEPOT-VERWALTUNG (INTERAKTIVER EDITOR WITH SECTOR SELECTBOX)
 # ---------------------------------------------------------
 with tab_b:
     st.header("Aktueller Depot-Status & Verwaltung")
-    st.caption("Füge neue Aktien hinzu, ändere Stückzahlen/Kurse oder lösche verkaufte Positionen direkt in der Tabelle.")
+    st.caption("Füge neue Aktien hinzu. Den Sektor kannst du bequem über das Menü auswählen.")
     
-    # Interaktiver Data Editor
+    # Buttons zur Steuerung
+    col_reset1, col_reset2 = st.columns([1, 4])
+    with col_reset1:
+        if st.button("🗑️ Depot komplett leeren"):
+            st.session_state.portfolio_data = pd.DataFrame(columns=["Ticker", "Name", "Sector", "Shares", "Price_EUR"])
+            st.rerun()
+    with col_reset2:
+        if st.button("🔄 Standard-Depot laden"):
+            st.session_state.portfolio_data = get_initial_portfolio()
+            st.rerun()
+
+    # Verfügbare Sektoren als Dropdown definieren
+    available_sectors = sorted(list(set(df_universe["Sector"].tolist() + [
+        "Technology", "Financial Services", "Healthcare", "Industrials", 
+        "Consumer Discretionary", "Consumer Staples", "Energy", "Utilities", "Sonstige"
+    ])))
+
+    # Interaktiver Data Editor mit Sektor-Dropdown
     edited_df = st.data_editor(
         st.session_state.portfolio_data,
         num_rows="dynamic",
         use_container_width=True,
         key="portfolio_editor",
         column_config={
-            "Shares": st.column_config.NumberColumn("Stückzahl", min_value=0, step=1),
-            "Price_EUR": st.column_config.NumberColumn("Kurs (€)", min_value=0.0, format="%.2f €"),
+            "Ticker": st.column_config.TextColumn("Ticker", help="z. B. AAPL, AXA"),
+            "Name": st.column_config.TextColumn("Name"),
+            "Sector": st.column_config.SelectboxColumn("Sektor", options=available_sectors, required=True),
+            "Shares": st.column_config.NumberColumn("Stückzahl", min_value=0, step=1, default=0),
+            "Price_EUR": st.column_config.NumberColumn("Kurs (€)", min_value=0.0, format="%.2f €", default=0.0),
         }
     )
 
-    # Aktualisierte Daten im Session State speichern
-    st.session_state.portfolio_data = edited_df
+    # Automatische Absicherung & Reinigung
+    if not edited_df.empty:
+        cleaned_df = edited_df.dropna(subset=["Ticker"]).copy()
+        cleaned_df["Sector"] = cleaned_df["Sector"].fillna("Sonstige")
+        st.session_state.portfolio_data = cleaned_df
+    else:
+        st.session_state.portfolio_data = edited_df
+
+    df_portfolio = st.session_state.portfolio_data.copy()
 
     # Live-Berechnung des Aktienwerts
-    df_portfolio = edited_df.copy()
     if not df_portfolio.empty and "Shares" in df_portfolio.columns and "Price_EUR" in df_portfolio.columns:
-        df_portfolio["Position_Value"] = df_portfolio["Shares"].fillna(0) * df_portfolio["Price_EUR"].fillna(0)
+        df_portfolio["Shares"] = pd.to_numeric(df_portfolio["Shares"], errors='coerce').fillna(0)
+        df_portfolio["Price_EUR"] = pd.to_numeric(df_portfolio["Price_EUR"], errors='coerce').fillna(0)
+        df_portfolio["Position_Value"] = df_portfolio["Shares"] * df_portfolio["Price_EUR"]
         total_stock_value = df_portfolio["Position_Value"].sum()
     else:
         df_portfolio["Position_Value"] = 0.0
