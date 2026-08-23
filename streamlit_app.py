@@ -36,12 +36,21 @@ def load_mock_universe():
             "Ticker": "SAP.DE", "Name": "SAP SE", "Sector": "Technology", 
             "Quality_Score": 85, "Fair_Value": 190.00, "Current_Price": 195.00, 
             "PER": 32.0, "Beta": 0.95, "Plausibility_Status": "🟢 Robust"
+        },
+        {
+            "Ticker": "AAPL", "Name": "Apple Inc.", "Sector": "Technology", 
+            "Quality_Score": 90, "Fair_Value": 220.00, "Current_Price": 210.00, 
+            "PER": 30.0, "Beta": 1.05, "Plausibility_Status": "🟢 Robust"
+        },
+        {
+            "Ticker": "MSFT", "Name": "Microsoft Corp.", "Sector": "Technology", 
+            "Quality_Score": 94, "Fair_Value": 430.00, "Current_Price": 415.00, 
+            "PER": 34.0, "Beta": 0.90, "Plausibility_Status": "🟢 Robust"
         }
     ])
 
-# Session State initialisieren
-if "portfolio_data" not in st.session_state:
-    st.session_state.portfolio_data = get_initial_portfolio()
+if "portfolio_list" not in st.session_state:
+    st.session_state.portfolio_list = get_initial_portfolio().to_dict('records')
 
 df_universe = load_mock_universe()
 
@@ -79,56 +88,84 @@ with tab_a:
     st.info(f"**Modell-Status:** {stock_data['Plausibility_Status']}")
 
 # ---------------------------------------------------------
-# TAB B: DEPOT-VERWALTUNG (FEHLERFREIE LIVE-BERECHNUNG)
+# TAB B: DEPOT-VERWALTUNG (MOBILE-OPTIMIERTES FORMULAR)
 # ---------------------------------------------------------
 with tab_b:
     st.header("Aktueller Depot-Status & Verwaltung")
-    st.caption("Trage deine Aktien ein. Werte werden sofort verrechnet!")
     
-    col_reset1, col_reset2 = st.columns([1, 4])
-    with col_reset1:
-        if st.button("🗑️ Depot komplett leeren"):
-            st.session_state.portfolio_data = pd.DataFrame(columns=["Ticker", "Name", "Sector", "Shares", "Price_EUR"])
-            st.rerun()
-    with col_reset2:
-        if st.button("🔄 Standard-Depot laden"):
-            st.session_state.portfolio_data = get_initial_portfolio()
-            st.rerun()
-
-    available_sectors = sorted(list(set(df_universe["Sector"].tolist() + [
-        "Technology", "Financial Services", "Healthcare", "Industrials", 
-        "Consumer Discretionary", "Consumer Staples", "Energy", "Utilities", "Sonstige"
-    ])))
-
-    # Editor für Eingaben
-    edited_df = st.data_editor(
-        st.session_state.portfolio_data,
-        num_rows="dynamic",
-        use_container_width=True,
-        key="portfolio_editor",
-        column_config={
-            "Ticker": st.column_config.TextColumn("Ticker", default=""),
-            "Name": st.column_config.TextColumn("Name", default=""),
-            "Sector": st.column_config.SelectboxColumn("Sektor", options=available_sectors, default="Sonstige"),
-            "Shares": st.column_config.NumberColumn("Stückzahl", min_value=0.0, step=1.0, default=0.0),
-            "Price_EUR": st.column_config.NumberColumn("Kurs (€)", min_value=0.0, format="%.2f €", default=0.0),
-        }
-    )
-
-    # Im State speichern
-    st.session_state.portfolio_data = edited_df
-    df_portfolio = edited_df.copy()
-
-    # Berechnungslogik (Robust gegen leere/None Felder)
-    if not df_portfolio.empty:
-        # Fehlende/None Werte in Stückzahl und Preis sofort als 0 behandeln
-        shares = pd.to_numeric(df_portfolio["Shares"], errors='coerce').fillna(0.0)
-        prices = pd.to_numeric(df_portfolio["Price_EUR"], errors='coerce').fillna(0.0)
+    # --- FORMULAR ZUM HINZUFÜGEN / BEARBEITEN ---
+    with st.expander("➕ Position hinzufügen oder anpassen", expanded=True):
+        all_tickers = df_universe["Ticker"].tolist() + ["Manuell eintragen"]
+        select_tick = st.selectbox("Aktie auswählen:", all_tickers)
         
-        df_portfolio["Position_Value"] = shares * prices
+        if select_tick != "Manuell eintragen":
+            match = df_universe[df_universe["Ticker"] == select_tick].iloc[0]
+            default_ticker = match["Ticker"]
+            default_name = match["Name"]
+            default_sector = match["Sector"]
+            default_price = float(match["Current_Price"])
+        else:
+            default_ticker = ""
+            default_name = ""
+            default_sector = "Technology"
+            default_price = 0.0
+
+        form_ticker = st.text_input("Ticker Symbol:", value=default_ticker)
+        form_name = st.text_input("Name der Aktie:", value=default_name)
+        
+        sectors_list = sorted(list(set(df_universe["Sector"].tolist() + ["Technology", "Financial Services", "Healthcare", "Industrials", "Consumer Discretionary", "Energy", "Sonstige"])))
+        sector_idx = sectors_list.index(default_sector) if default_sector in sectors_list else 0
+        form_sector = st.selectbox("Sektor:", sectors_list, index=sector_idx)
+        
+        form_shares = st.number_input("Stückzahl:", min_value=0.0, value=10.0, step=1.0)
+        form_price = st.number_input("Kaufpreis / Kurs (€):", min_value=0.0, value=default_price, step=1.0)
+
+        if st.button("💾 Position im Depot speichern"):
+            if form_ticker.strip() != "":
+                # Vorhandene Position überschreiben oder neue hinzufügen
+                st.session_state.portfolio_list = [p for p in st.session_state.portfolio_list if p["Ticker"] != form_ticker.strip()]
+                st.session_state.portfolio_list.append({
+                    "Ticker": form_ticker.strip(),
+                    "Name": form_name.strip(),
+                    "Sector": form_sector,
+                    "Shares": float(form_shares),
+                    "Price_EUR": float(form_price)
+                })
+                st.success(f"Position {form_ticker} gespeichert!")
+                st.rerun()
+
+    # --- LISTE DER BESTEHENDEN POSITIONEN ---
+    st.subheader("Bestehende Positionen")
+    
+    col_b1, col_b2 = st.columns(2)
+    with col_b1:
+        if st.button("🗑️ Depot komplett leeren"):
+            st.session_state.portfolio_list = []
+            st.rerun()
+    with col_b2:
+        if st.button("🔄 Standard-Depot laden"):
+            st.session_state.portfolio_list = get_initial_portfolio().to_dict('records')
+            st.rerun()
+
+    # Portfolio als DataFrame aufbereiten
+    if len(st.session_state.portfolio_list) > 0:
+        df_portfolio = pd.DataFrame(st.session_state.portfolio_list)
+        df_portfolio["Position_Value"] = df_portfolio["Shares"] * df_portfolio["Price_EUR"]
         total_stock_value = df_portfolio["Position_Value"].sum()
+
+        # Einzelne Positionen als Karten mit Löschen-Button anzeigen
+        for idx, item in enumerate(st.session_state.portfolio_list):
+            pos_val = item["Shares"] * item["Price_EUR"]
+            c1, c2 = st.columns([3, 1])
+            with c1:
+                st.markdown(f"**{item['Ticker']}** ({item['Name']}) - *{item['Sector']}*  \n{item['Shares']:.0f} Stk. × {item['Price_EUR']:.2f} € = **{pos_val:,.2f} €**")
+            with c2:
+                if st.button("🗑️", key=f"del_{item['Ticker']}_{idx}"):
+                    st.session_state.portfolio_list.pop(idx)
+                    st.rerun()
+            st.divider()
     else:
-        df_portfolio["Position_Value"] = 0.0
+        df_portfolio = pd.DataFrame(columns=["Ticker", "Name", "Sector", "Shares", "Price_EUR", "Position_Value"])
         total_stock_value = 0.0
 
     total_portfolio_value = total_stock_value + cash_balance
@@ -151,19 +188,13 @@ with tab_c:
     sim_data = df_universe[df_universe["Ticker"] == sim_ticker].iloc[0].to_dict()
     sim_data["raw_mos"] = ((sim_data["Fair_Value"] - sim_data["Current_Price"]) / sim_data["Current_Price"]) * 100
     
-    # Sicherstellen, dass Sektoren verglichen werden können
-    df_valid_pos = df_portfolio.copy()
-    if not df_valid_pos.empty:
-        df_valid_pos["Sector"] = df_valid_pos["Sector"].fillna("Sonstige")
-        df_valid_pos["Ticker"] = df_valid_pos["Ticker"].fillna("")
-        
-        existing_pos_val = df_valid_pos[df_valid_pos["Ticker"] == sim_ticker]["Position_Value"].sum()
-        existing_sector_val = df_valid_pos[df_valid_pos["Sector"] == sim_data["Sector"]]["Position_Value"].sum()
+    if not df_portfolio.empty:
+        existing_pos_val = df_portfolio[df_portfolio["Ticker"] == sim_ticker]["Position_Value"].sum()
+        existing_sector_val = df_portfolio[df_portfolio["Sector"] == sim_data["Sector"]]["Position_Value"].sum()
     else:
         existing_pos_val = 0.0
         existing_sector_val = 0.0
 
-    # Werte nach der Simulation
     new_total_portfolio = total_portfolio_value + sim_amount
     new_total_stock = total_stock_value + sim_amount
     new_pos_val = existing_pos_val + sim_amount
@@ -172,12 +203,8 @@ with tab_c:
     quote_before = (total_stock_value / total_portfolio_value * 100) if total_portfolio_value > 0 else 0
     quote_after = (new_total_stock / new_total_portfolio * 100) if new_total_portfolio > 0 else 0
     new_pos_weight = (new_pos_val / new_total_portfolio * 100) if new_total_portfolio > 0 else 0
-    sector_weight_before = (existing_sector_val / total_portfolio_value * 100) if total_portfolio_value > 0 else 0
-    new_sector_weight = (new_sector_val / new_total_portfolio * 100) if new_total_portfolio > 0 else 0
-    
     sector_share_equities_after = (new_sector_val / new_total_stock * 100) if new_total_stock > 0 else 0
     
-    # Hard Limits (in EUR)
     max_pos_eur = total_portfolio_value * (limit_pct_input / 100.0)
     max_sector_eur = total_portfolio_value * (sector_limit_pct_input / 100.0)
     max_target_eur = total_portfolio_value * (target_stock_quote_max / 100.0)
@@ -188,15 +215,11 @@ with tab_c:
         new_total_stock <= max_target_eur
     )
 
-    # =========================================================
-    # 4-STUFEN KONZENTRATIONSLOGIK
-    # =========================================================
-    raw_hard_limit_space = min(
+    raw_hard_limit_space = max(0.0, min(
         max_pos_eur - existing_pos_val,
         max_sector_eur - existing_sector_val,
         max_target_eur - total_stock_value
-    )
-    raw_hard_limit_space = max(0.0, raw_hard_limit_space)
+    ))
 
     sec_share = sector_share_equities_after
 
@@ -205,73 +228,38 @@ with tab_c:
         is_drossel_active = True
         tranche_status = "🔴 SEKTOR-SPERRE"
         drossel_headline = "🔴 SEKTOR-SPERRE"
-        drossel_reason = (
-            f"Sektor `{sim_data['Sector']}` macht **{sec_share:.1f} %** deines Aktienportfolios aus (> 50 %-Schwelle). "
-            f"Weitere Nachkäufe sind vollständig blockiert."
-        )
-
+        drossel_reason = f"Sektor `{sim_data['Sector']}` macht **{sec_share:.1f} %** deines Aktienportfolios aus (> 50 %)."
     elif sec_share >= 40.0:
         max_recommended_buy = min(1000.0, raw_hard_limit_space)
         is_drossel_active = True
         tranche_status = "🟠 GEDROSSELTE TRANCHE"
         drossel_headline = f"🟠 KAUF MÖGLICH – GEDROSSELTE ERST-TRANCHE (MAX. {max_recommended_buy:,.0f} €)"
-        drossel_reason = (
-            f"Sektor `{sim_data['Sector']}` stellt **{sec_share:.1f} %** deines Aktienportfolios (Schwelle: 40–50 %). "
-            f"Ein Einstieg ist nur als **gedrosselte Erst-Tranche (max. {max_recommended_buy:,.0f} €)** gestattet."
-        )
-
+        drossel_reason = f"Sektor `{sim_data['Sector']}` stellt **{sec_share:.1f} %** deines Aktienportfolios."
     elif sec_share >= 30.0:
         max_recommended_buy = min(1500.0, raw_hard_limit_space)
         is_drossel_active = True
         tranche_status = "🟡 ERST-TRANCHE"
         drossel_headline = "🟡 KAUF MÖGLICH – ERST-TRANCHE BEACHTEN"
-        drossel_reason = (
-            f"Sektor `{sim_data['Sector']}` erreicht **{sec_share:.1f} %** des Aktienportfolios (Schwelle: 30–40 %). "
-            f"Empfohlene Erst-Tranche: max. {max_recommended_buy:,.0f} €."
-        )
-
+        drossel_reason = f"Sektor `{sim_data['Sector']}` erreicht **{sec_share:.1f} %** des Aktienportfolios."
     else:
         max_recommended_buy = raw_hard_limit_space
         is_drossel_active = False
         tranche_status = "🟢 UNBESCHRÄNKT"
         drossel_headline = "🟢 NORMAL KAUFEN"
-        drossel_reason = f"Sektor `{sim_data['Sector']}` ist mit **{sec_share:.1f} %** am Aktienportfolio optimal diversifiziert (< 30 %)."
+        drossel_reason = f"Sektor `{sim_data['Sector']}` ist mit **{sec_share:.1f} %** optimal diversifiziert."
 
-    # =========================================================
-    # UI METRICS DISPLAY
-    # =========================================================
     st.divider()
     st.markdown(f"### Simulation: Kauf von **{sim_amount:,.2f} €** in `{sim_data['Ticker']}` ({sim_data['Name']})")
-    st.caption(f"Sektor: **{sim_data['Sector']}**")
     
     s1, s2, s3, s4 = st.columns(4)
-    s1.metric("Gesamte Aktienquote", f"{quote_before:.1f} % ➔ {quote_after:.1f} %", delta=f"Ziel-Max: {target_stock_quote_max}%")
-    s2.metric("Positionsgewicht (Depot)", f"{new_pos_weight:.1f} %", delta=f"Max: {limit_pct_input:.1f}%")
-    s3.metric("Sektor am Aktienanteil", f"{sec_share:.1f} %", delta="Schwelle: 40 %", delta_color="inverse" if sec_share >= 40 else "normal")
-    s4.metric(
-        "Max. Erst-Tranche", 
-        f"{max_recommended_buy:,.0f} €", 
-        delta=tranche_status, 
-        delta_color="inverse" if is_drossel_active else "normal"
-    )
+    s1.metric("Aktienquote", f"{quote_before:.1f} % ➔ {quote_after:.1f} %", delta=f"Ziel-Max: {target_stock_quote_max}%")
+    s2.metric("Positionsgewicht", f"{new_pos_weight:.1f} %", delta=f"Max: {limit_pct_input:.1f}%")
+    s3.metric("Sektoranteil", f"{sec_share:.1f} %", delta="Schwelle: 40 %", delta_color="inverse" if sec_share >= 40 else "normal")
+    s4.metric("Max. Erst-Tranche", f"{max_recommended_buy:,.0f} €", delta=tranche_status, delta_color="inverse" if is_drossel_active else "normal")
 
-    # =========================================================
-    # DECISION DISPLAY
-    # =========================================================
-    if not hard_limit_ok or "🔴 Daten-/Modellwarnung" in sim_data["Plausibility_Status"] or sim_data["raw_mos"] <= 0 or sim_amount > (max_recommended_buy + 0.01):
-        if sim_amount > max_recommended_buy and hard_limit_ok and sim_data["raw_mos"] > 0:
-            st.error(
-                f"### 🔴 KAUFVOLUMEN BLOCKIERT\n"
-                f"ℹ️ **Geplante Kaufsumme ({sim_amount:,.2f} €) überschreitet das Tranchen-Cap.**  \n"
-                f"👉 **Max. erlaubte Erst-Tranche:** **{max_recommended_buy:,.2f} €** unter den aktuellen Sektorgewichtungen."
-            )
-        else:
-            st.error("### 🔴 KEIN KAUF / WARTEN\nℹ️ **Grund:** Hard Limit gerissen, Qualität unzureichend (<50) oder Bewertung ohne Puffer.")
-    
+    if not hard_limit_ok or sim_amount > (max_recommended_buy + 0.01):
+        st.error(f"### 🔴 KAUFVOLUMEN BLOCKIERT\nℹ️ Max. erlaubte Erst-Tranche: **{max_recommended_buy:,.2f} €**")
     elif is_drossel_active:
-        st.warning(f"### {drossel_headline}\nℹ️ **Kapital-Disziplin:** {drossel_reason}")
-    
-    elif "🟡" in sim_data["Plausibility_Status"]:
-        st.warning("### 🟡 KAUF MÖGLICH\nℹ️ **Hinweis:** Kauf ist möglich, leichte Modell- / Sektorhinweise beachten.")
+        st.warning(f"### {drossel_headline}\nℹ️ {drossel_reason}")
     else:
-        st.success(f"### {drossel_headline}\nℹ️ **Optimal:** Alle Kennzahlen grün, hervorragende Depot-Integration.")
+        st.success(f"### {drossel_headline}\nℹ️ Alle Kennzahlen grün.")
