@@ -39,7 +39,7 @@ def load_mock_universe():
         }
     ])
 
-# Session State für das Portfolio initialisieren
+# Session State initialisieren
 if "portfolio_data" not in st.session_state:
     st.session_state.portfolio_data = get_initial_portfolio()
 
@@ -79,13 +79,12 @@ with tab_a:
     st.info(f"**Modell-Status:** {stock_data['Plausibility_Status']}")
 
 # ---------------------------------------------------------
-# TAB B: DEPOT-VERWALTUNG (INTERAKTIVER EDITOR WITH SECTOR SELECTBOX)
+# TAB B: DEPOT-VERWALTUNG (FEHLERFREIE LIVE-BERECHNUNG)
 # ---------------------------------------------------------
 with tab_b:
     st.header("Aktueller Depot-Status & Verwaltung")
-    st.caption("Füge neue Aktien hinzu. Den Sektor kannst du bequem über das Menü auswählen.")
+    st.caption("Trage deine Aktien ein. Werte werden sofort verrechnet!")
     
-    # Buttons zur Steuerung
     col_reset1, col_reset2 = st.columns([1, 4])
     with col_reset1:
         if st.button("🗑️ Depot komplett leeren"):
@@ -96,42 +95,37 @@ with tab_b:
             st.session_state.portfolio_data = get_initial_portfolio()
             st.rerun()
 
-    # Verfügbare Sektoren als Dropdown definieren
     available_sectors = sorted(list(set(df_universe["Sector"].tolist() + [
         "Technology", "Financial Services", "Healthcare", "Industrials", 
         "Consumer Discretionary", "Consumer Staples", "Energy", "Utilities", "Sonstige"
     ])))
 
-    # Interaktiver Data Editor mit Sektor-Dropdown
+    # Editor für Eingaben
     edited_df = st.data_editor(
         st.session_state.portfolio_data,
         num_rows="dynamic",
         use_container_width=True,
         key="portfolio_editor",
         column_config={
-            "Ticker": st.column_config.TextColumn("Ticker", help="z. B. AAPL, AXA"),
-            "Name": st.column_config.TextColumn("Name"),
-            "Sector": st.column_config.SelectboxColumn("Sektor", options=available_sectors, required=True),
-            "Shares": st.column_config.NumberColumn("Stückzahl", min_value=0, step=1, default=0),
+            "Ticker": st.column_config.TextColumn("Ticker", default=""),
+            "Name": st.column_config.TextColumn("Name", default=""),
+            "Sector": st.column_config.SelectboxColumn("Sektor", options=available_sectors, default="Sonstige"),
+            "Shares": st.column_config.NumberColumn("Stückzahl", min_value=0.0, step=1.0, default=0.0),
             "Price_EUR": st.column_config.NumberColumn("Kurs (€)", min_value=0.0, format="%.2f €", default=0.0),
         }
     )
 
-    # Automatische Absicherung & Reinigung
-    if not edited_df.empty:
-        cleaned_df = edited_df.dropna(subset=["Ticker"]).copy()
-        cleaned_df["Sector"] = cleaned_df["Sector"].fillna("Sonstige")
-        st.session_state.portfolio_data = cleaned_df
-    else:
-        st.session_state.portfolio_data = edited_df
+    # Im State speichern
+    st.session_state.portfolio_data = edited_df
+    df_portfolio = edited_df.copy()
 
-    df_portfolio = st.session_state.portfolio_data.copy()
-
-    # Live-Berechnung des Aktienwerts
-    if not df_portfolio.empty and "Shares" in df_portfolio.columns and "Price_EUR" in df_portfolio.columns:
-        df_portfolio["Shares"] = pd.to_numeric(df_portfolio["Shares"], errors='coerce').fillna(0)
-        df_portfolio["Price_EUR"] = pd.to_numeric(df_portfolio["Price_EUR"], errors='coerce').fillna(0)
-        df_portfolio["Position_Value"] = df_portfolio["Shares"] * df_portfolio["Price_EUR"]
+    # Berechnungslogik (Robust gegen leere/None Felder)
+    if not df_portfolio.empty:
+        # Fehlende/None Werte in Stückzahl und Preis sofort als 0 behandeln
+        shares = pd.to_numeric(df_portfolio["Shares"], errors='coerce').fillna(0.0)
+        prices = pd.to_numeric(df_portfolio["Price_EUR"], errors='coerce').fillna(0.0)
+        
+        df_portfolio["Position_Value"] = shares * prices
         total_stock_value = df_portfolio["Position_Value"].sum()
     else:
         df_portfolio["Position_Value"] = 0.0
@@ -157,10 +151,14 @@ with tab_c:
     sim_data = df_universe[df_universe["Ticker"] == sim_ticker].iloc[0].to_dict()
     sim_data["raw_mos"] = ((sim_data["Fair_Value"] - sim_data["Current_Price"]) / sim_data["Current_Price"]) * 100
     
-    # Bereits existierende Allokationen ermitteln
-    if not df_portfolio.empty and "Ticker" in df_portfolio.columns and "Sector" in df_portfolio.columns:
-        existing_pos_val = df_portfolio[df_portfolio["Ticker"] == sim_ticker]["Position_Value"].sum()
-        existing_sector_val = df_portfolio[df_portfolio["Sector"] == sim_data["Sector"]]["Position_Value"].sum()
+    # Sicherstellen, dass Sektoren verglichen werden können
+    df_valid_pos = df_portfolio.copy()
+    if not df_valid_pos.empty:
+        df_valid_pos["Sector"] = df_valid_pos["Sector"].fillna("Sonstige")
+        df_valid_pos["Ticker"] = df_valid_pos["Ticker"].fillna("")
+        
+        existing_pos_val = df_valid_pos[df_valid_pos["Ticker"] == sim_ticker]["Position_Value"].sum()
+        existing_sector_val = df_valid_pos[df_valid_pos["Sector"] == sim_data["Sector"]]["Position_Value"].sum()
     else:
         existing_pos_val = 0.0
         existing_sector_val = 0.0
@@ -177,7 +175,6 @@ with tab_c:
     sector_weight_before = (existing_sector_val / total_portfolio_value * 100) if total_portfolio_value > 0 else 0
     new_sector_weight = (new_sector_val / new_total_portfolio * 100) if new_total_portfolio > 0 else 0
     
-    # Sektor-Anteil nur am Aktienportfolio
     sector_share_equities_after = (new_sector_val / new_total_stock * 100) if new_total_stock > 0 else 0
     
     # Hard Limits (in EUR)
@@ -192,7 +189,7 @@ with tab_c:
     )
 
     # =========================================================
-    # 4-STUFEN KONZENTRATIONSLOGIK (AKTIENPORTFOLIO)
+    # 4-STUFEN KONZENTRATIONSLOGIK
     # =========================================================
     raw_hard_limit_space = min(
         max_pos_eur - existing_pos_val,
@@ -204,30 +201,26 @@ with tab_c:
     sec_share = sector_share_equities_after
 
     if sec_share > 50.0:
-        # STUFE 4: > 50% -> STRATEGISCHE SEKTOR-SPERRE
         max_recommended_buy = 0.0
         is_drossel_active = True
         tranche_status = "🔴 SEKTOR-SPERRE"
         drossel_headline = "🔴 SEKTOR-SPERRE"
         drossel_reason = (
             f"Sektor `{sim_data['Sector']}` macht **{sec_share:.1f} %** deines Aktienportfolios aus (> 50 %-Schwelle). "
-            f"Weitere Nachkäufe sind vollständig blockiert, bis andere Sektoren ausgebaut wurden."
+            f"Weitere Nachkäufe sind vollständig blockiert."
         )
 
     elif sec_share >= 40.0:
-        # STUFE 3: 40 - 50% -> GEDROSSELTE ERST-TRANCHE
         max_recommended_buy = min(1000.0, raw_hard_limit_space)
         is_drossel_active = True
         tranche_status = "🟠 GEDROSSELTE TRANCHE"
         drossel_headline = f"🟠 KAUF MÖGLICH – GEDROSSELTE ERST-TRANCHE (MAX. {max_recommended_buy:,.0f} €)"
         drossel_reason = (
             f"Sektor `{sim_data['Sector']}` stellt **{sec_share:.1f} %** deines Aktienportfolios (Schwelle: 40–50 %). "
-            f"Ein Einstieg ist nur als **gedrosselte Erst-Tranche (max. {max_recommended_buy:,.0f} €)** gestattet. "
-            f"Folgekäufe erst nach Diversifikation."
+            f"Ein Einstieg ist nur als **gedrosselte Erst-Tranche (max. {max_recommended_buy:,.0f} €)** gestattet."
         )
 
     elif sec_share >= 30.0:
-        # STUFE 2: 30 - 40% -> NORMALE ERST-TRANCHE
         max_recommended_buy = min(1500.0, raw_hard_limit_space)
         is_drossel_active = True
         tranche_status = "🟡 ERST-TRANCHE"
@@ -238,7 +231,6 @@ with tab_c:
         )
 
     else:
-        # STUFE 1: < 30% -> NORMALER KAUF
         max_recommended_buy = raw_hard_limit_space
         is_drossel_active = False
         tranche_status = "🟢 UNBESCHRÄNKT"
@@ -260,12 +252,11 @@ with tab_c:
         "Max. Erst-Tranche", 
         f"{max_recommended_buy:,.0f} €", 
         delta=tranche_status, 
-        delta_color="inverse" if is_drossel_active else "normal",
-        help="Maximale Erst-Tranche unter den aktuellen Depotbedingungen zur Wahrung der Kapital-Disziplin."
+        delta_color="inverse" if is_drossel_active else "normal"
     )
 
     # =========================================================
-    # DECISION DISPLAY (ENDURTEIL)
+    # DECISION DISPLAY
     # =========================================================
     if not hard_limit_ok or "🔴 Daten-/Modellwarnung" in sim_data["Plausibility_Status"] or sim_data["raw_mos"] <= 0 or sim_amount > (max_recommended_buy + 0.01):
         if sim_amount > max_recommended_buy and hard_limit_ok and sim_data["raw_mos"] > 0:
