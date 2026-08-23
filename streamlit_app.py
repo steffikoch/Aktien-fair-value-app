@@ -7,8 +7,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-# Titel genau wie gewünscht
-st.markdown("# 📈 Stock Valuation & Portfolio Capacity Engine")
+st.title("📈 Stock Valuation & Portfolio Capacity Engine")
 
 # Die exakten 3 Reiter
 tab_a, tab_b, tab_c = st.tabs(
@@ -20,47 +19,46 @@ tab_a, tab_b, tab_c = st.tabs(
 )
 
 # =========================================================
-# TAB A: AKTIEN-ANALYSE & BEWERTUNG
+# TAB A: MEHRKRITERIEN-BEWERTUNG & AKTIEN-ANALYSE
 # =========================================================
 with tab_a:
-    st.subheader("Einzelaktien-Bewertung & Risiko")
+    st.subheader("Einzelaktien-Bewertung nach Kriterien")
+    st.markdown("Bewerte die Aktie anhand verschiedener Qualitäts- und Fundamentalkriterien:")
 
-    current_price = st.number_input(
-        "Aktueller Kurs (€):", value=100.0, step=1.0, key="ana_price"
-    )
+    # Kriterien-Eingaben (Scoring-Modell)
+    col_c1, col_c2 = st.columns(2)
+    with col_c1:
+        crit_fcf = st.checkbox("Positive Cashflow-Metriken", value=True, key="c_fcf")
+        crit_growth = st.checkbox("Starkes Gewinnwachstum (>10%)", value=True, key="c_growth")
+        crit_moat = st.checkbox("Intakter Trend / Momentum", value=True, key="c_moat")
+    with col_c2:
+        crit_balance = st.checkbox("Gesunde Bilanz / geringe Schulden", value=True, key="c_balance")
+        crit_margin = st.checkbox("Hohe operative Marge", value=False, key="c_margin")
+        crit_valuation = st.checkbox("Attraktive Bewertung (DCF/KGV)", value=True, key="c_val")
+
+    # Score-Berechnung aus Kriterien
+    criteria_list = [crit_fcf, crit_growth, crit_moat, crit_balance, crit_margin, crit_valuation]
+    score = sum(criteria_list)
+    max_score = len(criteria_list)
+    score_pct = (score / max_score) * 100
+
+    st.markdown("---")
+    st.metric(label="Erfüllte Kriterien (Gesamt-Score)", value=f"{score} von {max_score} ({score_pct:.0f}%)")
+    
+    if score >= 5:
+        st.success("🟢 Starkes Setup: Aktie erfüllt die Mehrheit der Qualitätskriterien.")
+    elif score >= 3:
+        st.warning("🟡 Moderates Setup: Einige Kriterien sind noch offen.")
+    else:
+        st.error("🔴 Schwaches Setup: Kriterien-Anforderungen nicht ausreichend erfüllt.")
+
+    st.markdown("---")
+    st.subheader("🧮 Kurs- & Risiko-Parameter")
+    current_price = st.number_input("Aktueller Kurs (€):", value=100.0, step=1.0, key="ana_price")
     stop_pct = st.slider("Stop-Abstand (%):", 1.0, 20.0, 8.0, key="ana_stop")
     calculated_stop = current_price * (1 - stop_pct / 100)
 
-    st.markdown("---")
-    st.metric(
-        label="Berechneter Stop-Loss Kurs", value=f"{calculated_stop:.2f} €"
-    )
-
-    st.markdown("---")
-    st.subheader("🧮 Erweiterte Bewertung & DCF Indikation")
-    
-    col_val1, col_val2 = st.columns(2)
-    with col_val1:
-        pe_ratio = st.number_input("KGV (P/E Ratio):", value=18.5, step=0.5, key="ana_pe")
-    with col_val2:
-        eps = st.number_input("Gewinn je Aktie (€):", value=5.0, step=0.5, key="ana_eps")
-
-    fcf = st.number_input(
-        "Free Cash Flow (Mio. €):", value=500.0, step=50.0, key="ana_fcf"
-    )
-    growth = st.slider("Wachstum p.a. (%):", 0.0, 30.0, 8.0, key="ana_growth")
-    wacc = st.slider("WACC / Abzinsung (%):", 5.0, 15.0, 9.0, key="ana_wacc")
-
-    fair_value = fcf * (1 + growth / 100) / (wacc / 100)
-    implied_value_eps = eps * pe_ratio
-
-    st.markdown("---")
-    st.metric(
-        label="Fairer Wert (DCF Indikation Mio. €)", value=f"{fair_value:,.2f} €"
-    )
-    st.metric(
-        label="Indikativer Kurs via KGV (EPS x KGV)", value=f"{implied_value_eps:,.2f} €"
-    )
+    st.metric(label="Berechneter Stop-Loss Kurs", value=f"{calculated_stop:.2f} €")
 
 
 # =========================================================
