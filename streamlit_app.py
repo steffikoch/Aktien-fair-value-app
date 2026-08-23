@@ -10,6 +10,9 @@ st.title("📊 Risiko & Fair-Value Analysator")
 
 tab1, tab2 = st.tabs(["🔍 Einzelanalyse", "📋 Watchlist & Kauflimits"])
 
+# ==========================================
+# TAB 1: EINZELANALYSE
+# ==========================================
 with tab1:
     st.subheader("Aktie auswählen")
     
@@ -104,7 +107,6 @@ with tab1:
                     if vals:
                         base_case = np.average(vals, weights=weights)
                         
-                        # Dynamische fundamentale Szenarien mit expliziten Treibern
                         bear_eps = (eval_eps * 0.85) if eval_eps else 0
                         bull_eps = (eval_eps * 1.15) if eval_eps else 0
                         
@@ -157,22 +159,28 @@ with tab1:
                     else:
                         st.error(f"🔴 **VERKAUFEN / ÜBERBEWERTET** | Kurs liegt {abs(margin_of_safety):.1f}% über dem Fair Value.")
 
-                    # "Warum?"-Erklärungsblock
+                    # Dynamischer "Warum dieses Urteil?"-Erklärungsblock
                     if vals:
-                        with st.expander("💡 Warum dieses Urteil? (Schnell-Analyse)"):
-                            st.write(f"- **Qualität:** {'🟢' if quality_score >= 80 else ('🟡' if quality_score >= 70 else '🔴')} Quality Score **{quality_score}/100**")
-                            st.write(f"- **Bewertung:** {'🟢' if margin_of_safety >= 20 else ('🟠' if margin_of_safety >= 0 else '🔴')} Sicherheitsmarge **+{margin_of_safety:.1f}%**")
-                            downside_bear_val = ((bear_case - current_price) / current_price) * 100
-                            st.write(f"- **Bear-Risiko:** {'🔴' if downside_bear_val < -20 else '🟡'} **{downside_bear_val:.1f}%**")
-                            pe_val_str = f"{pe_ratio:.1f}x" if pe_ratio else "N/A"
-                            st.write(f"- **KGV-Niveau:** {'🔴' if pe_ratio and pe_ratio > 30 else '🟢'} **{pe_val_str}**")
-                            st.write(f"- **Net Cash:** {'🟢' if net_cash_per_share > 0 else '⚪'} **+{net_cash_per_share:.2f} {currency_symbol} / Aktie**")
-                            st.write(f"- **Erster Einstieg (15% Marge):** **{limit_15:.2f} {currency_symbol}**")
+                        downside_bear_val = ((bear_case - current_price) / current_price) * 100
+                        pe_str = f"{pe_ratio:.1f}x" if pe_ratio else "N/A"
+                        
+                        with st.expander("💡 Warum dieses Urteil? (Schnell-Analyse)", expanded=True):
+                            st.markdown(f"""
+                            * **Qualität:** {'🟢' if quality_score >= 80 else ('🟡' if quality_score >= 70 else '🔴')} Quality Score **{quality_score}/100**
+                            * **Bewertung:** {'🟢' if margin_of_safety >= 20 else ('🟠' if margin_of_safety >= 0 else '🔴')} Fair-Value-Puffer **+{margin_of_safety:.1f}%**
+                            * **Bear-Risiko:** {'🔴' if downside_bear_val < -20 else '🟡'} **{downside_bear_val:.1f}%**
+                            * **KGV-Niveau:** {'🔴' if pe_ratio and pe_ratio > 30 else '🟢'} **{pe_str}** {'(Anspruchsvoll)' if pe_ratio and pe_ratio > 30 else ''}
+                            * **Net Cash:** {'🟢' if net_cash_per_share > 0 else '⚪'} **+{net_cash_per_share:.2f} {currency_symbol} / Aktie**
+                            * **Kauflimits:** {'🟢 Voll aktiv' if quality_score >= 80 else ('🟡 Aktiv (Reduzierte Dosis)' if quality_score >= 70 else '🔴 Ausgesetzt')}
+                            
+                            **Fazit:**  
+                            {"Hochwertiges Unternehmen, aber aktuell kein ausreichender Sicherheitsabstand." if margin_of_safety < 10 and quality_score >= 70 else "Gute Einstiegsgelegenheit mit adäquatem Sicherheitspuffer."}
+                            """)
 
                     if net_cash_per_share > 0:
                         st.caption(f"💡 Enthält einen Net-Cash-Bonus von +{net_cash_per_share:.2f} {currency_symbol} je Aktie.")
 
-                    # Chance / Risiko Profile (RRR Base vs Bull)
+                    # Chance / Risiko Profile (RRR Base vs Bull) mit Tooltips
                     if vals and current_price > 0:
                         st.subheader("⚖️ Chance / Risiko-Profil")
                         upside_base = ((base_case - current_price) / current_price) * 100
@@ -187,8 +195,17 @@ with tab1:
                         cr1.metric("Bear Downside", f"{downside_bear:+.1f} %", delta_color="inverse")
                         cr2.metric("Fair Value Upside", f"{upside_base:+.1f} %")
                         cr3.metric("Bull Upside", f"{upside_bull:+.1f} %")
-                        cr4.metric("RRR (Base Case)", f"{rrr_base:.2f}x")
-                        cr5.metric("RRR (Bull Case)", f"{rrr_bull:.2f}x")
+                        
+                        cr4.metric(
+                            "RRR (Base Case)", 
+                            f"{rrr_base:.2f}x", 
+                            help="Berechnung: Fair Value Upside / Bear Downside. Zeigt das Chance/Risiko-Verhältnis im realistischen Szenario. Ein Wert unter 1.0x bedeutet, dass das Rückschlagsrisiko den Fair-Value-Puffer übersteigt."
+                        )
+                        cr5.metric(
+                            "RRR (Bull Case)", 
+                            f"{rrr_bull:.2f}x", 
+                            help="Berechnung: Bull Case Upside / Bear Downside. Zeigt das maximale Potenzial, wenn sowohl EPS-Wachstum als auch Multiple-Expansion eintreffen."
+                        )
 
                     # Kauflimit-Rechner
                     if vals:
@@ -211,7 +228,6 @@ with tab1:
                         })
                         st.table(limits_df)
                         
-                        # Dreistufige Regel zur Qualitätskontrolle bei Limits
                         if quality_score >= 80:
                             st.success("🟢 **Quality Rule:** Kauflimits sind VOLL AKTIV (Starkes Qualitätsunternehmen).")
                         elif quality_score >= 70:
@@ -226,7 +242,6 @@ with tab1:
                     sc2.metric("Base-Case (Realistisch)", f"{base_case:.2f} {currency_symbol}")
                     sc3.metric("Best-Case (Optimistisch)", f"{best_case:.2f} {currency_symbol}")
 
-                    # Tabelle der Szenario-Treiber
                     if eval_eps:
                         drivers_df = pd.DataFrame({
                             "Szenario": ["Bear-Case", "Base-Case", "Bull-Case"],
@@ -264,5 +279,87 @@ with tab1:
             except Exception as e:
                 st.error(f"Fehler bei der Datenabfrage: {str(e)}")
 
+# ==========================================
+# TAB 2: WATCHLIST & KAUFLIMITS
+# ==========================================
 with tab2:
-    st.write("Hier kannst du deine Kauflimits verwalten.")
+    st.subheader("📋 Mehrere Aktien im Vergleich (Watchlist)")
+    st.write("Gib mehrere Ticker ein (kommagetrennt), um Fair Value, Quality Score und Kauflimits auf einen Blick zu vergleichen.")
+    
+    watchlist_input = st.text_input("Ticker-Liste:", value="COCO, AAPL, MSFT, TOST")
+    calc_watchlist_btn = st.button("Watchlist berechnen", type="primary")
+
+    if calc_watchlist_btn and watchlist_input:
+        tickers = [t.strip().upper() for t in watchlist_input.split(",") if t.strip()]
+        
+        results = []
+        with st.spinner("Berechne Watchlist-Daten..."):
+            for t in tickers:
+                try:
+                    s = yf.Ticker(t)
+                    i = s.info
+                    price = i.get("currentPrice") or i.get("regularMarketPrice")
+                    if not price or np.isnan(price):
+                        continue
+                    
+                    curr = i.get("currency", "USD")
+                    curr_sym = "€" if curr == "EUR" else "$"
+                    eps = i.get("forwardEps") or i.get("trailingEps")
+                    fcf = i.get("freeCashflow")
+                    shares = i.get("sharesOutstanding")
+                    growth = max(0, (i.get("earningsGrowth", 0) or 0) * 100)
+                    margins = i.get("profitMargins", 0) or 0
+                    
+                    # Net Cash
+                    total_cash = i.get("totalCash", 0) or 0
+                    total_debt = i.get("totalDebt", 0) or 0
+                    net_cash_ps = 0.0
+                    if shares and shares > 0 and (total_cash - total_debt) > 0:
+                        net_cash_ps = (total_cash - total_debt) / shares
+                    
+                    # Fair Value Modell
+                    target_pe = min(30.0, max(15.0, 15.0 + (growth * 0.4)))
+                    vals = []
+                    if eps and eps > 0:
+                        vals.append((eps * target_pe) + net_cash_ps)
+                    if fcf and shares and fcf > 0 and shares > 0:
+                        vals.append(((fcf / shares) * target_pe) + net_cash_ps)
+                    
+                    if vals:
+                        fv = np.mean(vals)
+                        mos = ((fv - price) / price) * 100
+                        limit_15 = fv * 0.85
+                        limit_25 = fv * 0.75
+                    else:
+                        fv, mos, limit_15, limit_25 = price, 0.0, price, price
+
+                    # Quality Score
+                    score = min(100, int(growth * 0.8) + int(margins * 120) + (20 if net_cash_ps > 0 else 5) + 20)
+
+                    # Signal
+                    if score < 70:
+                        signal = "🔴 Ausgesetzt (Score <70)"
+                    elif mos >= 20:
+                        signal = "🟢 Kaufzone"
+                    elif mos >= 0:
+                        signal = "🟠 Abwarten"
+                    else:
+                        signal = "🔴 Überbewertet"
+
+                    results.append({
+                        "Ticker": t,
+                        f"Aktueller Kurs ({curr_sym})": f"{price:.2f}",
+                        f"Fair Value ({curr_sym})": f"{fv:.2f}",
+                        "Puffer (%)": f"{mos:+.1f} %",
+                        "Quality Score": f"{score}/100",
+                        f"1. Limit (15%) ({curr_sym})": f"{limit_15:.2f}",
+                        f"2. Limit (25%) ({curr_sym})": f"{limit_25:.2f}",
+                        "Signal": signal
+                    })
+                except Exception:
+                    pass
+        
+        if results:
+            st.table(pd.DataFrame(results))
+        else:
+            st.warning("Keine Daten für die angegebenen Ticker gefunden.")
