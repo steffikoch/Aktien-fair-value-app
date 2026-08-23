@@ -157,10 +157,9 @@ def analyze_stock_4score(symbol, current_position_val, total_portfolio_val):
         mos = ((fair_value - price) / price) * 100 if fair_value > 0 else 0.0
 
         # -------------------------------------------------------------
-        # BUGFIX: DIVIDEND YIELD SANITIZATION & NETTO-RENDITE (CAGR)
+        # DIVIDEND YIELD SANITIZATION & RENDITEPROGNOSE
         # -------------------------------------------------------------
         raw_div_yield = info.get('dividendYield') or 0.0
-        # yfinance Sanitisierung (Skalierungsfehler abfangen)
         if raw_div_yield > 1.0:
             div_yield_gross = raw_div_yield
         else:
@@ -169,7 +168,7 @@ def analyze_stock_4score(symbol, current_position_val, total_portfolio_val):
         TAX_RATE = 0.26375  # Abgeltungsteuer + Soli (DE)
         net_div_yield = div_yield_gross * (1.0 - TAX_RATE)
 
-        # Kursrendite p.a. (CAGR auf 3 und 5 Jahre)
+        # Kursrendite p.a. (CAGR)
         if price > 0 and fair_value > price:
             cap_gain_3y_gross = ((fair_value / price) ** (1 / 3) - 1) * 100
             cap_gain_5y_gross = ((fair_value / price) ** (1 / 5) - 1) * 100
@@ -180,9 +179,17 @@ def analyze_stock_4score(symbol, current_position_val, total_portfolio_val):
         net_cap_gain_3y = cap_gain_3y_gross * (1.0 - TAX_RATE)
         net_cap_gain_5y = cap_gain_5y_gross * (1.0 - TAX_RATE)
 
-        # Gesamtrendite p.a. Netto (ohne Reinvestition der Dividenden)
-        total_ret_3y_net = net_cap_gain_3y + net_div_yield
-        total_ret_5y_net = net_cap_gain_5y + net_div_yield
+        # 1. Variante A: Ohne Reinvestition (Cash-Flow)
+        ret_3y_no_drip = net_cap_gain_3y + net_div_yield
+        ret_5y_no_drip = net_cap_gain_5y + net_div_yield
+
+        # 2. Variante B: Mit Reinvestition (DRIP / Compound)
+        cagr_3y_dec = net_cap_gain_3y / 100.0
+        cagr_5y_dec = net_cap_gain_5y / 100.0
+        div_dec = net_div_yield / 100.0
+
+        ret_3y_drip = (((1.0 + cagr_3y_dec) * (1.0 + div_dec)) - 1.0) * 100.0
+        ret_5y_drip = (((1.0 + cagr_5y_dec) * (1.0 + div_dec)) - 1.0) * 100.0
 
         # -------------------------------------------------------------
         # SCORE 3: RISK & CAPITAL EFFICIENCY SCORE
@@ -237,8 +244,10 @@ def analyze_stock_4score(symbol, current_position_val, total_portfolio_val):
             "net_div_yield": net_div_yield,
             "net_cap_gain_3y": net_cap_gain_3y,
             "net_cap_gain_5y": net_cap_gain_5y,
-            "total_ret_3y_net": total_ret_3y_net,
-            "total_ret_5y_net": total_ret_5y_net,
+            "ret_3y_no_drip": ret_3y_no_drip,
+            "ret_5y_no_drip": ret_5y_no_drip,
+            "ret_3y_drip": ret_3y_drip,
+            "ret_5y_drip": ret_5y_drip,
             "sector": sector
         }
     except Exception:
@@ -252,6 +261,15 @@ ticker_input = st.sidebar.text_input("Aktien-Name oder Ticker:", value="Deutsche
 st.sidebar.markdown("---")
 pos_val_input = st.sidebar.number_input("Aktueller Wert im Depot (€):", min_value=0.0, value=710.0, step=50.0)
 depot_val_input = st.sidebar.number_input("Gesamtdepot-Wert (€):", min_value=1.0, value=10000.0, step=500.0)
+
+st.sidebar.markdown("---")
+st.sidebar.header("🔄 Dividenden-Modell")
+drip_mode = st.sidebar.radio(
+    "Strategie wählen:",
+    ["Ausschüttung (Keine Reinvestition)", "Wiederanlage (DRIP / Compound)"],
+    index=0
+)
+is_drip = "Wiederanlage" in drip_mode
 
 # =============================================================
 # HAUPTAUSWERTUNG
@@ -273,10 +291,14 @@ if ticker_input:
         rc_score = res["risk_cap_score"]
         fit_score = res["fit_score"]
         weight_pct = res["weight_pct"]
-        exp_ret_net = res["total_ret_5y_net"]
+        
+        # Renditewerte je nach DRIP-Einstellung
+        total_3y = res["ret_3y_drip"] if is_drip else res["ret_3y_no_drip"]
+        total_5y = res["ret_5y_drip"] if is_drip else res["ret_5y_no_drip"]
         
         limits_active = True
         
+        # Signallogik mit Drosselung bei hohem Depotgewicht (7.0 - 7.5%)
         if q_score < 40 or res["net_margin"] < 3.0:
             final_action = "🔴 KEIN KAUF (Value Trap: Zu geringe Marge & Qualität)"
             limits_active = False
@@ -286,14 +308,17 @@ if ticker_input:
         elif conf_score < 45:
             final_action = "🔴 KEIN KAUF (Fair Value unsicher)"
             limits_active = False
-        elif exp_ret_net < 3.0:
+        elif total_5y < 3.0:
             final_action = "🔴 KEIN KAUF (Netto-Rendite unter 3.0% p.a.)"
             limits_active = True
         elif rc_score < 40 or mos < 10:
             final_action = "🟠 ABWARTEN (Sicherheitspuffer zu gering)"
             limits_active = True
         elif q_score >= 65 and mos >= 12:
-            final_action = "🟢 NACHKAUF / POSITION AUFSTOCKEN"
+            if weight_pct >= 7.0:
+                final_action = "🟡 NACHKAUF (Gedrosselt: Position nahe Obergrenze 7,5%)"
+            else:
+                final_action = "🟢 NACHKAUF / POSITION AUFSTOCKEN"
             limits_active = True
         else:
             final_action = "🟡 BEOBACHTEN"
@@ -313,6 +338,7 @@ if ticker_input:
         u_cols = st.columns(4)
         with u_cols[0]:
             if weight_pct > 7.5: st.write(f"🔴 **Depotgewicht:** Hoch ({weight_pct:.1f}%)")
+            elif weight_pct >= 7.0: st.write(f"🟡 **Depotgewicht:** Nahe Grenze ({weight_pct:.1f}%)")
             else: st.write(f"🟢 **Depotgewicht:** Im Zielbereich ({weight_pct:.1f}%)")
         with u_cols[1]:
             if mos < 10: st.write(f"🔴 **Puffer:** Zu gering ({mos:+.1f}%)")
@@ -327,26 +353,28 @@ if ticker_input:
         st.markdown("---")
         
         # Netto-Renditeprognose Segment
-        ret_icon = "🟢" if res["total_ret_5y_net"] >= 5.0 else ("🟡" if res["total_ret_5y_net"] >= 3.0 else "🔴")
-        st.markdown(f"### {ret_icon} Erwartete Netto-Gesamtrendite p.a. (nach Steuern)")
+        ret_icon = "🟢" if total_5y >= 5.0 else ("🟡" if total_5y >= 3.0 else "🔴")
+        mode_label = "mit DRIP / Reinvestition" if is_drip else "ohne Reinvestition (Cash-Flow)"
+        
+        st.markdown(f"### {ret_icon} Erwartete Netto-Gesamtrendite p.a. ({mode_label})")
         
         r_col1, r_col2 = st.columns(2)
         with r_col1:
             st.metric(
-                label=" Horizont 3 Jahre (p.a.)", 
-                value=f"{res['total_ret_3y_net']:.2f} %",
+                label="Horizont 3 Jahre (p.a.)", 
+                value=f"{total_3y:.2f} %",
                 delta=f"Kurs: {res['net_cap_gain_3y']:.2f}% | Div: {res['net_div_yield']:.2f}%"
             )
         with r_col2:
             st.metric(
-                label=" Horizont 5 Jahre (p.a.)", 
-                value=f"{res['total_ret_5y_net']:.2f} %",
+                label="Horizont 5 Jahre (p.a.)", 
+                value=f"{total_5y:.2f} %",
                 delta=f"Kurs: {res['net_cap_gain_5y']:.2f}% | Div: {res['net_div_yield']:.2f}%"
             )
 
         st.caption(
             "ℹ️ **Berechnungsgrundlage:** 26,375 % Abgeltungsteuer berücksichtigt. "
-            "**Ohne Reinvestition der Dividenden** (Ausschüttungen fließen als Liquidität zu). "
+            f"**Modus:** {mode_label}. "
             f"Brutto-Dividendenrendite: {res['div_yield_gross']:.2f}% → Netto: {res['net_div_yield']:.2f}%."
         )
 
