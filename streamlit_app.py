@@ -89,7 +89,7 @@ with tab_a:
     st.info(f"**Modell-Status:** {stock_data['Plausibility_Status']}")
 
 # ---------------------------------------------------------
-# TAB B: DEPOT-VERWALTUNG (FEHLERFREIES SPEICHERN)
+# TAB B: DEPOT-VERWALTUNG (OPTIONALER TICKER)
 # ---------------------------------------------------------
 with tab_b:
     st.header("Aktueller Depot-Status & Verwaltung")
@@ -111,8 +111,8 @@ with tab_b:
             default_sector = "Technology"
             default_price = 0.0
 
-        form_ticker = st.text_input("Ticker Symbol:", value=default_ticker)
         form_name = st.text_input("Name der Aktie:", value=default_name)
+        form_ticker = st.text_input("Ticker Symbol (Optional):", value=default_ticker)
         
         sectors_list = sorted(list(set(df_universe["Sector"].tolist() + [
             "Technology", "Financial Services", "Healthcare", "Industrials", 
@@ -125,26 +125,30 @@ with tab_b:
         form_price = st.number_input("Kaufpreis / Kurs (€):", min_value=0.0, value=default_price, step=1.0)
 
         if st.button("💾 Position im Depot speichern"):
-            if form_ticker.strip() != "":
-                clean_ticker = form_ticker.strip().upper()
+            if form_name.strip() != "":
+                clean_name = form_name.strip()
+                # Falls kein Ticker vorhanden ist, generieren wir ein Kürzel aus dem Namen
+                clean_ticker = form_ticker.strip().upper() if form_ticker.strip() != "" else clean_name[:4].upper()
                 
-                # 1. Entferne vorherige Version der Aktie (falls bereits in der Liste), um Duplikate zu vermeiden
+                # 1. Entferne vorherige Version der Aktie (falls Ticker/Name bereits vorhanden)
                 st.session_state.portfolio_list = [
                     p for p in st.session_state.portfolio_list 
-                    if p["Ticker"].upper() != clean_ticker
+                    if p["Ticker"].upper() != clean_ticker and p["Name"].lower() != clean_name.lower()
                 ]
                 
                 # 2. Hänge die neue Aktie an die bestehende Liste an
                 st.session_state.portfolio_list.append({
                     "Ticker": clean_ticker,
-                    "Name": form_name.strip(),
+                    "Name": clean_name,
                     "Sector": form_sector,
                     "Shares": float(form_shares),
                     "Price_EUR": float(form_price)
                 })
                 
-                st.success(f"Position {clean_ticker} erfolgreich gespeichert!")
+                st.success(f"Position {clean_name} ({clean_ticker}) erfolgreich gespeichert!")
                 st.rerun()
+            else:
+                st.error("Bitte gib mindestens den Namen der Aktie ein!")
 
     # --- LISTE DER BESTEHENDEN POSITIONEN ---
     st.subheader("Bestehende Positionen")
@@ -171,7 +175,7 @@ with tab_b:
             c1, c2 = st.columns([3, 1])
             with c1:
                 st.markdown(
-                    f"**{item['Ticker']}** ({item['Name']}) - *{item['Sector']}*  \n"
+                    f"**{item['Name']}** ({item['Ticker']}) - *{item['Sector']}*  \n"
                     f"{item['Shares']:.0f} Stk. × {item['Price_EUR']:.2f} € = **{pos_val:,.2f} €**"
                 )
             with c2:
