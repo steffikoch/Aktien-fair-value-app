@@ -22,8 +22,7 @@ tab_a, tab_b, tab_c = st.tabs(
 with tab_a:
     st.subheader("Aktien- & Risiko-Analyse")
 
-    # Wieder eingefügtes Eingabefeld für den Aktiennamen
-    aktien_name = st.text_input("Aktienname:", value="Allianz", key="ana_name")
+    aktien_name = st.text_input("Aktienname:", value="AXA", key="ana_name")
 
     current_price = st.number_input(
         "Aktueller Kurs (€):", value=100.0, step=1.0, key="ana_price"
@@ -155,27 +154,73 @@ with tab_c:
     }
     sim_sektor = sektor_mapping.get(sim_aktie, "Sonstige")
 
-    # Zählen, wie oft dieser Sektor im Depot (Tab B) bereits vorkommt
-    sektor_zaehler = 0
-    if "depot_df" in st.session_state and not st.session_state.depot_df.empty:
-        sektor_filter = st.session_state.depot_df["Sektor"].astype(str).str.lower() == sim_sektor.lower()
-        sektor_zaehler = sektor_filter.sum()
+    # --- Kennzahlen & Depot-Berechnungen für die Simulation ---
+    # 1. Gesamtwert Aktien & Depot berechnen
+    depot_df = st.session_state.get("depot_df", pd.DataFrame())
+    aktienwert_depot = 0.0
+    sektor_aktienwert = 0.0
+
+    if not depot_df.empty:
+        try:
+            depot_df["Zeilenwert"] = depot_df["Stückzahl"].astype(float) * depot_df["Kurs (€)"].astype(float)
+            aktienwert_depot = depot_df["Zeilenwert"].sum()
+            
+            # Sektorwert im Aktienportfolio ermitteln
+            sektor_mask = depot_df["Sektor"].astype(str).str.lower() == sim_sektor.lower()
+            sektor_aktienwert = depot_df.loc[sektor_mask, "Zeilenwert"].sum()
+        except Exception:
+            pass
+
+    # Gesamtdepotwert inklusive Cash aus Tab B holen
+    cash_wert = st.session_state.get("depot_cash", 0.0)
+    gesamtdepot_wert = aktienwert_depot + cash_wert
+
+    # 2. Prüfungen gemäß deiner Logik
+    # A) Sektoranteil am reinen Aktienportfolio
+    sektor_anteil_aktien = (sektor_aktienwert / aktienwert_depot * 100) if aktienwert_depot > 0 else 0.0
+
+    # B) Sektorlimit vom Gesamtdepot (max. 25% als hartes Limit oder Richtwert)
+    sektor_anteil_gesamtdepot = (sektor_aktienwert / gesamtdepot_wert * 100) if gesamtdepot_wert > 0 else 0.0
+    MAX_SEKTOR_GESAMTDEPOT_LIMIT = 25.0
 
     st.markdown("---")
     st.markdown(f"**Simulation für {sim_aktie} (Sektor: {sim_sektor}):**")
-    st.metric(label="Investitionssumme", value=f"{geplante_summe:,.2f} €")
+    st.metric(label="Geplante Investitionssumme", value=f"{geplante_summe:,.2f} €")
 
-    # Definition des Limits pro Sektor (hier max. 2)
-    MAX_SEKTOR_LIMIT = 2
+    # Signal-Auswertung für Sektor am Aktienportfolio
+    if sektor_anteil_aktien < 30.0:
+        sektor_status = "🟢 Normal"
+    elif 30.0 <= sektor_anteil_aktien < 40.0:
+        sektor_status = "🟡 Beobachten"
+    elif 40.0 <= sektor_anteil_aktien <= 50.0:
+        sektor_status = "🟠 Kauf drosseln"
+    else:
+        sektor_status = "🔴 Keine weiteren Käufe"
 
-    if sektor_zaehler >= MAX_SEKTOR_LIMIT:
+    # Modellierte maximale Erst-Tranche unter aktuellen Depotbedingungen
+    modellierte_max_tranche = 1500.0
+
+    st.info(
+        f"📊 **Portfolio-Check:**\n"
+        f"- Sektoranteil am Aktienportfolio: **{sektor_anteil_aktien:.1f} %** ({sektor_status})\n"
+        f"- Sektoranteil am Gesamtdepot: **{sektor_anteil_gesamtdepot:.1f} %** (Limit: {MAX_SEKTOR_GESAMTDEPOT_LIMIT}%)\n"
+        f"- Modellierte **maximale Erst-Tranche**: **{modellierte_max_tranche:,.2f} €**"
+    )
+
+    # Validierung gegen Schwellen
+    if sektor_anteil_aktien > 50.0:
         st.error(
-            f"❌ Fehlgeschlagen: Es befinden sich bereits {sektor_zaehler} Werte "
-            f"aus dem Sektor '{sim_sektor}' im Depot (Limit: {MAX_SEKTOR_LIMIT}). "
-            "Kein weiterer Kauf möglich (Klumpenrisiko)!"
+            f"❌ Stopp: Sektoranteil am Aktienportfolio liegt bei {sektor_anteil_aktien:.1f} (> 50 %). "
+            "Keine weiteren Käufe in diesem Sektor möglich!"
+        )
+    elif geplante_summe > modellierte_max_tranche and sektor_anteil_aktien >= 40.0:
+        st.warning(
+            f"🟡 Gedrosselte Erst-Tranche: Der Sektoranteil am Aktienportfolio ({sektor_anteil_aktien:.1f} %) "
+            f"befindet sich im Bereich 40–50 %. Die geplante Summe überschreitet die modellierte "
+            f"maximale Erst-Tranche von {modellierte_max_tranche:,.2f} €."
         )
     else:
         st.success(
             f"✅ Kaufgröße im Rahmen der gewählten Tranchen-Limits "
-            f"(Sektor-Anteil: {sektor_zaehler}/{MAX_SEKTOR_LIMIT})."
+            f"(Sektor-Status: {sektor_status})."
         )
