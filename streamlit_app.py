@@ -98,14 +98,12 @@ with tab1:
                     if kgv_val:
                         vals.append(kgv_val); weights.append(1.0)
                     if fcf_val:
-                        # Hohe FCF-Qualität wird stärker gewichtet
                         fcf_weight = 1.5 if profit_margins > 0.10 else 1.0
                         vals.append(fcf_val); weights.append(fcf_weight)
                     
                     if vals:
                         base_case = np.average(vals, weights=weights)
                         
-                        # Bear und Bull mit gestaffelten KGVs/Szenarien
                         bear_eps_val = (eval_eps * target_pe_bear) + net_cash_per_share if eval_eps else base_case * 0.8
                         bull_eps_val = (eval_eps * target_pe_bull) + net_cash_per_share if eval_eps else base_case * 1.2
                         
@@ -126,22 +124,44 @@ with tab1:
                     col2.metric("Qualitätsbereinigter Fair Value", f"{base_case:.2f} {currency_symbol}" if vals else "N/A")
                     col3.metric("Sicherheitspuffer", f"{margin_of_safety:.1f} %" if vals else "0.0 %")
                     
-                    # 5. Neue feingliedrige Ampel-Logik
+                    # Exakte Ampel-Logik
                     if not vals:
                         st.info("Urteil: **NEUTRAL / UNRENTABEL** (Keine ausreichenden Gewinne/FCF vorhanden)")
-                    elif margin_of_safety >= 30:
-                        st.success(f"Urteil: 🟢 **STARK KAUFEN** (Sehr hoher Sicherheitspuffer)")
-                    elif margin_of_safety >= 15:
-                        st.success(f"Urteil: 🟢 **KAUFEN** (Guter Sicherheitspuffer)")
-                    elif margin_of_safety >= 5:
-                        st.warning(f"Urteil: 🟡 **HALTEN / KLEINE POSITION** (Moderat bewertet)")
-                    elif margin_of_safety >= -15:
-                        st.warning(f"Urteil: 🟠 **ABWARTEN** (Leicht überbewertet)")
+                    elif margin_of_safety > 30:
+                        st.success(f"Urteil: 🟢 **STARKER KAUF** (Sicherheitspuffer > 30%)")
+                    elif margin_of_safety >= 20:
+                        st.success(f"Urteil: 🟢 **KAUFEN** (Sicherheitspuffer 20–30%)")
+                    elif margin_of_safety >= 10:
+                        st.warning(f"Urteil: 🟡 **BEOBACHTEN** (Sicherheitspuffer 10–20%)")
+                    elif margin_of_safety >= 0:
+                        st.warning(f"Urteil: 🟠 **ABWARTEN** (Sicherheitspuffer 0–10%)")
                     else:
-                        st.error(f"Urteil: 🔴 **VERKAUFEN** (Stark überbewertet)")
+                        st.error(f"Urteil: 🔴 **VERKAUFEN** (Sicherheitspuffer < 0%)")
 
                     if net_cash_per_share > 0:
                         st.caption(f"💡 Enthält einen Net-Cash-Bonus von +{net_cash_per_share:.2f} {currency_symbol} je Aktie.")
+
+                    # Kauflimit-Rechner
+                    if vals:
+                        st.subheader("🎯 Kauflimit-Rechner (Staffeln & Limits)")
+                        limit_10 = base_case * 0.90
+                        limit_15 = base_case * 0.85
+                        limit_20 = base_case * 0.80
+                        limit_25 = base_case * 0.75
+                        limit_30 = base_case * 0.70
+
+                        limits_df = pd.DataFrame({
+                            "Sicherheitsmarge": ["10 % (Beobachten)", "15 % (1. Staffel)", "20 % (2. Staffel)", "25 % (Starke Kaufzone)", "30 % (Sehr starker Kauf)"],
+                            f"Zielkurs ({currency_symbol})": [f"{limit_10:.2f}", f"{limit_15:.2f}", f"{limit_20:.2f}", f"{limit_25:.2f}", f"{limit_30:.2f}"],
+                            "Abstand vom aktuellen Kurs": [
+                                f"{((limit_10 - current_price) / current_price) * 100:+.1f} %",
+                                f"{((limit_15 - current_price) / current_price) * 100:+.1f} %",
+                                f"{((limit_20 - current_price) / current_price) * 100:+.1f} %",
+                                f"{((limit_25 - current_price) / current_price) * 100:+.1f} %",
+                                f"{((limit_30 - current_price) / current_price) * 100:+.1f} %"
+                            ]
+                        })
+                        st.table(limits_df)
 
                     # Szenarien
                     st.subheader("Szenarien")
