@@ -160,15 +160,11 @@ def analyze_stock_4score(symbol, current_position_val, total_portfolio_val):
         # DIVIDEND YIELD SANITIZATION & RENDITEPROGNOSE
         # -------------------------------------------------------------
         raw_div_yield = info.get('dividendYield') or 0.0
-        if raw_div_yield > 1.0:
-            div_yield_gross = raw_div_yield
-        else:
-            div_yield_gross = raw_div_yield * 100.0
+        div_yield_gross = raw_div_yield if raw_div_yield > 1.0 else raw_div_yield * 100.0
 
         TAX_RATE = 0.26375  # Abgeltungsteuer + Soli (DE)
         net_div_yield = div_yield_gross * (1.0 - TAX_RATE)
 
-        # Kursrendite p.a. (CAGR)
         if price > 0 and fair_value > price:
             cap_gain_3y_gross = ((fair_value / price) ** (1 / 3) - 1) * 100
             cap_gain_5y_gross = ((fair_value / price) ** (1 / 5) - 1) * 100
@@ -179,11 +175,11 @@ def analyze_stock_4score(symbol, current_position_val, total_portfolio_val):
         net_cap_gain_3y = cap_gain_3y_gross * (1.0 - TAX_RATE)
         net_cap_gain_5y = cap_gain_5y_gross * (1.0 - TAX_RATE)
 
-        # 1. Variante A: Ohne Reinvestition (Cash-Flow)
+        # 1. Cash-Flow Modus (Ohne DRIP)
         ret_3y_no_drip = net_cap_gain_3y + net_div_yield
         ret_5y_no_drip = net_cap_gain_5y + net_div_yield
 
-        # 2. Variante B: Mit Reinvestition (DRIP / Compound)
+        # 2. Reinvestitions-Modus (Mit DRIP / Compound)
         cagr_3y_dec = net_cap_gain_3y / 100.0
         cagr_5y_dec = net_cap_gain_5y / 100.0
         div_dec = net_div_yield / 100.0
@@ -199,19 +195,26 @@ def analyze_stock_4score(symbol, current_position_val, total_portfolio_val):
         risk_cap_score = min(100, max(0, mos_part + qual_part))
 
         # -------------------------------------------------------------
-        # SCORE 4: PORTFOLIO FIT SCORE (MAXIMALGEWICHT 10 %)
+        # SCORE 4: PORTFOLIO FIT & DEPOTKAPAZITÄT (MAXIMALGEWICHT 7.5 %)
         # -------------------------------------------------------------
         weight_pct = (current_position_val / total_portfolio_val * 100) if total_portfolio_val > 0 else 0.0
+        max_weight_limit = 7.5
         
+        remaining_cap_pct = max(0.0, max_weight_limit - weight_pct)
+        max_buy_eur = (remaining_cap_pct / 100.0) * total_portfolio_val
+
         if weight_pct > 10.0:
             fit_score = 0
             pos_status = f"🔴 {weight_pct:.1f}% (⚠️ KEIN NACHKAUF: >10% Hard Limit)"
         elif weight_pct > 7.5:
             fit_score = 30
-            pos_status = f"🟠 {weight_pct:.1f}% (⚠️ NACHKAUF-BREMSE: 7.5–10%)"
+            pos_status = f"🟠 {weight_pct:.1f}% (⚠️ NACHKAUF-BREMSE: >7.5%)"
+        elif weight_pct >= 7.0:
+            fit_score = 60
+            pos_status = f"🟡 {weight_pct:.1f}% (Nahe Obergrenze 7,5%)"
         elif weight_pct >= 4.0:
-            fit_score = 70
-            pos_status = f"🟡 {weight_pct:.1f}% (Normale Gewichtung: 4–7.5%)"
+            fit_score = 80
+            pos_status = f"🟡 {weight_pct:.1f}% (Normale Gewichtung: 4–7%)"
         else:
             fit_score = 100
             pos_status = f"🟢 {weight_pct:.1f}% (Aufstockung möglich: <4%)"
@@ -237,6 +240,8 @@ def analyze_stock_4score(symbol, current_position_val, total_portfolio_val):
             "risk_cap_score": risk_cap_score,
             "fit_score": fit_score,
             "weight_pct": weight_pct,
+            "remaining_cap_pct": remaining_cap_pct,
+            "max_buy_eur": max_buy_eur,
             "pos_status": pos_status,
             "net_margin": net_margin,
             "fcf_status": fcf_status,
@@ -266,10 +271,10 @@ st.sidebar.markdown("---")
 st.sidebar.header("🔄 Dividenden-Modell")
 drip_mode = st.sidebar.radio(
     "Strategie wählen:",
-    ["Ausschüttung (Keine Reinvestition)", "Wiederanlage (DRIP / Compound)"],
+    ["1. Cash-Flow-Modus (Ausschüttung)", "2. Reinvestitions-Modus (DRIP)"],
     index=0
 )
-is_drip = "Wiederanlage" in drip_mode
+is_drip = "Reinvestitions" in drip_mode
 
 # =============================================================
 # HAUPTAUSWERTUNG
@@ -291,19 +296,22 @@ if ticker_input:
         rc_score = res["risk_cap_score"]
         fit_score = res["fit_score"]
         weight_pct = res["weight_pct"]
+        rem_cap = res["remaining_cap_pct"]
+        max_eur = res["max_buy_eur"]
         
         # Renditewerte je nach DRIP-Einstellung
         total_3y = res["ret_3y_drip"] if is_drip else res["ret_3y_no_drip"]
         total_5y = res["ret_5y_drip"] if is_drip else res["ret_5y_no_drip"]
         
         limits_active = True
+        is_throttled = False
         
-        # Signallogik mit Drosselung bei hohem Depotgewicht (7.0 - 7.5%)
+        # Signallogik
         if q_score < 40 or res["net_margin"] < 3.0:
             final_action = "🔴 KEIN KAUF (Value Trap: Zu geringe Marge & Qualität)"
             limits_active = False
         elif fit_score <= 30:
-            final_action = "🔴 KEIN NACHKAUF (Depotgewicht über der Grenze)"
+            final_action = "🔴 KEIN NACHKAUF (Depotgewicht über Obergrenze 7,5%)"
             limits_active = False
         elif conf_score < 45:
             final_action = "🔴 KEIN KAUF (Fair Value unsicher)"
@@ -317,6 +325,7 @@ if ticker_input:
         elif q_score >= 65 and mos >= 12:
             if weight_pct >= 7.0:
                 final_action = "🟡 NACHKAUF (Gedrosselt: Position nahe Obergrenze 7,5%)"
+                is_throttled = True
             else:
                 final_action = "🟢 NACHKAUF / POSITION AUFSTOCKEN"
             limits_active = True
@@ -337,7 +346,7 @@ if ticker_input:
         st.markdown("#### 🔎 Entscheidungs-Matrix")
         u_cols = st.columns(4)
         with u_cols[0]:
-            if weight_pct > 7.5: st.write(f"🔴 **Depotgewicht:** Hoch ({weight_pct:.1f}%)")
+            if weight_pct > 7.5: st.write(f"🔴 **Depotgewicht:** Exzediert ({weight_pct:.1f}%)")
             elif weight_pct >= 7.0: st.write(f"🟡 **Depotgewicht:** Nahe Grenze ({weight_pct:.1f}%)")
             else: st.write(f"🟢 **Depotgewicht:** Im Zielbereich ({weight_pct:.1f}%)")
         with u_cols[1]:
@@ -352,7 +361,7 @@ if ticker_input:
 
         st.markdown("---")
         
-        # Netto-Renditeprognose Segment
+        # Netto-Renditeprognose
         ret_icon = "🟢" if total_5y >= 5.0 else ("🟡" if total_5y >= 3.0 else "🔴")
         mode_label = "mit DRIP / Reinvestition" if is_drip else "ohne Reinvestition (Cash-Flow)"
         
@@ -396,19 +405,6 @@ if ticker_input:
             st.caption(res["pos_status"])
 
         st.markdown("---")
-        st.subheader("🔍 Detail-Aufschlüsselung des Quality Scores")
-        pil_cols = st.columns(5)
-        for idx, (pillar_name, (achieved, max_pts)) in enumerate(res["quality_pillars"].items()):
-            ratio = achieved / max_pts
-            p_color = "🔴" if ratio < 0.4 else ("🟡" if ratio < 0.7 else "🟢")
-            with pil_cols[idx]:
-                st.markdown(f"**{pillar_name}**")
-                st.write(f"{p_color} **{achieved}** / {max_pts} Pkt.")
-        
-        if res["growth_note"]:
-            st.caption(f"💡 *Hinweis zum Wachstum:* {res['growth_note']}")
-
-        st.markdown("---")
         st.subheader("🎯 Handlungsmarken & Kaufzonen-Status")
         limit_12 = fv * 0.88
         limit_20 = fv * 0.80
@@ -416,7 +412,13 @@ if ticker_input:
         if not limits_active:
             st.error("⚠️ KAUFLIMITS AUSGESETZT: Qualität zu schwach, Fair Value unsicher oder Depot-Limits erreicht.")
         else:
-            if price <= limit_20:
+            if is_throttled:
+                st.warning(
+                    f"🟡 **AKTUELL IN KAUFZONE – ABER GEDROSSELT**\n\n"
+                    f"Der Kurs (`{price:.2f} {curr_sym}`) liegt unter dem 20%-Kauflimit (`{limit_20:.2f} {curr_sym}`). "
+                    f"Da das Depotgewicht bereits `{weight_pct:.1f}%` erreicht hat, ist der Kauf auf max. 7,5% Obergrenze gedrosselt."
+                )
+            elif price <= limit_20:
                 st.success(f"🟢 **AKTUELL IN STARKER KAUFZONE (≥ 20% Rabatt)!**\n\n"
                            f"Aktueller Kurs (`{price:.2f} {curr_sym}`) liegt unter dem 20%-Limit (`{limit_20:.2f} {curr_sym}`).")
             elif price <= limit_12:
@@ -426,6 +428,8 @@ if ticker_input:
                 st.warning(f"🟡 **KEINE KAUFZONE (Sicherheitspuffer noch nicht erreicht)**\n\n"
                            f"Aktueller Kurs: `{price:.2f} {curr_sym}` | Nächstes Ziel (12% Rabatt): `{limit_12:.2f} {curr_sym}`")
 
-            l1, l2 = st.columns(2)
-            with l1: st.write(f"**1. Kauflimit (12 % Rabatt):** `{limit_12:.2f} {curr_sym}`")
-            with l2: st.write(f"**2. Kauflimit (20 % Rabatt):** `{limit_20:.2f} {curr_sym}`")
+            # Kapazitäts-Berechnung & Limits anzeigen
+            c1, c2, c3 = st.columns(3)
+            with c1: st.write(f"**1. Kauflimit (12 % Rabatt):** `{limit_12:.2f} {curr_sym}`")
+            with c2: st.write(f"**2. Kauflimit (20 % Rabatt):** `{limit_20:.2f} {curr_sym}`")
+            with c3: st.write(f"💶 **Max. Nachkauf bis 7,5%-Grenze:** `{max_eur:.2f} {curr_sym}` (Kapazität: `{rem_cap:.1f}%`)")
