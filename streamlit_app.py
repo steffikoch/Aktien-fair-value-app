@@ -381,7 +381,7 @@ with tab_b:
         st.info("Keine Aktien im Portfolio.")
 
 # =============================================================
-# TAB C: KAUFSIMULATION & PORTFOLIO FIT
+# TAB C: KAUFSIMULATION & PORTFOLIO FIT (KORRIGIERTE LOGIK)
 # =============================================================
 with tab_c:
     st.subheader("🟠 C. Kaufsimulation & Portfolio Fit")
@@ -426,7 +426,7 @@ with tab_c:
             new_sector_weight = (new_sector_val / depot_val_input) * 100
             sector_share_equities_after = (new_sector_val / total_stock_val_after * 100) if total_stock_val_after > 0 else 0.0
             
-            # Freie Spielräume (Hard Limits)
+            # Absolute Freiräume (Hard Limits)
             max_target_eur = (target_stock_quote_max / 100.0) * depot_val_input
             spielraum_quote_after = max(0.0, max_target_eur - total_stock_val_after)
             
@@ -436,20 +436,38 @@ with tab_c:
             max_sector_eur = (sector_limit_pct_input / 100.0) * depot_val_input
             spielraum_sector_after = max(0.0, max_sector_eur - new_sector_val)
 
-            # BERECHNUNG DER MAXIMAL EMPFOHLENEN KAUFGRÖSSE (DROSSEL-LOGIK)
-            raw_max_allowed_buy = min(
+            # =========================================================
+            # DROSSEL- UND KONZENTRATIONSLOGIK
+            # =========================================================
+            STANDARD_TRANCHE_EUR = 1000.0
+            SOFT_CONCENTRATION_WARN = 40.0  # ab 40% reduzierte Tranche
+            SOFT_CONCENTRATION_STOP = 75.0  # ab 75% Nachkauf-Drossel / Warten
+
+            # Freier Platz laut Hard Limits des Gesamtdepots
+            raw_hard_limit_space = min(
                 max_pos_eur - existing_pos_val,
                 max_sector_eur - existing_sector_val,
                 max_target_eur - total_stock_val_before
             )
-            raw_max_allowed_buy = max(0.0, raw_max_allowed_buy)
+            raw_hard_limit_space = max(0.0, raw_hard_limit_space)
 
-            high_concentration = sector_share_equities_after > 60.0
-            
-            # Bei hoher Sektor-Konzentration halbiert die Engine den empfohlenen Kaufbetrag
-            drossel_faktor = 0.5 if high_concentration else 1.0
-            max_recommended_buy = raw_max_allowed_buy * drossel_faktor
-            
+            # Berechnung der empfohlenen Kaufgröße basierend auf Konzentration
+            if sector_share_equities_after > SOFT_CONCENTRATION_STOP:
+                # Sehr hohes Sektor-Gewicht im Aktienanteil (>75 %) -> Maximale Tranche strikt deckeln
+                max_recommended_buy = min(STANDARD_TRANCHE_EUR, raw_hard_limit_space)
+                is_drossel_active = True
+                drossel_reason = f"Sektor {sim_data['Sector']} stellt {sector_share_equities_after:.1f} % des Aktienanteils. Kaufgröße auf max. {max_recommended_buy:,.2f} € gedeckelt."
+            elif sector_share_equities_after > SOFT_CONCENTRATION_WARN:
+                # Erhöhtes Sektor-Gewicht (40-75 %) -> Tranche vorsichtig begrenzen
+                max_recommended_buy = min(1500.0, raw_hard_limit_space)
+                is_drossel_active = True
+                drossel_reason = f"Sektor-Konzentration erhöht ({sector_share_equities_after:.1f} % des Aktienanteils). Empfohlene Tranche max. {max_recommended_buy:,.2f} €."
+            else:
+                # Diversifikation im Aktienanteil intakt (<40 %)
+                max_recommended_buy = raw_hard_limit_space
+                is_drossel_active = False
+                drossel_reason = "Gute Sektor-Diversifikation im Aktienanteil."
+
             st.divider()
             st.markdown(f"### Simulation: Kauf von **{sim_amount:,.2f} €** in `{sim_data['Ticker']}` ({sim_data['Name']})")
             st.caption(f"Sektor: **{sim_data['Sector']}**")
@@ -457,8 +475,8 @@ with tab_c:
             s1, s2, s3, s4 = st.columns(4)
             s1.metric("Gesamte Aktienquote", f"{quote_before:.1f} % ➔ {quote_after:.1f} %", delta=f"Ziel: {target_stock_quote_max}%")
             s2.metric("Positionsgewicht", f"{new_pos_weight:.1f} %", delta=f"Max: {limit_pct_input:.1f}%")
-            s3.metric(f"Sektor am Gesamtdepot", f"{sector_weight_before:.1f} % ➔ {new_sector_weight:.1f} %", delta=f"Max: {sector_limit_pct_input:.1f}%")
-            s4.metric("Max. Empf. Kaufgröße", f"{max_recommended_buy:,.2f} €", delta="Gedrosselt (50%)" if high_concentration else "Normal")
+            s3.metric("Sektor am Gesamtdepot", f"{sector_weight_before:.1f} % ➔ {new_sector_weight:.1f} %", delta=f"Max: {sector_limit_pct_input:.1f}%")
+            s4.metric("Max. Empf. Kaufgröße", f"{max_recommended_buy:,.2f} €", delta="Gedeckelt" if is_drossel_active else "Normal")
 
             st.divider()
             st.markdown("#### 🎯 8-Punkte-Checkliste (Portfolio Fit)")
@@ -486,51 +504,51 @@ with tab_c:
 
             # 5. Sektorgewicht am Gesamtdepot
             c_sec = "🟢" if new_sector_weight <= sector_limit_pct_input else "🔴"
-            check_sec = f"{c_sec} **5. Sektorgewicht (am Gesamtdepot):** {new_sector_weight:.1f} % (Limit: {sector_limit_pct_input:.1f} % | Spielraum: {spielraum_sector_after:,.2f} €)"
+            check_sec = f"{c_sec} **5. Sektorgewicht (Gesamtdepot):** {new_sector_weight:.1f} % (Limit: {sector_limit_pct_input:.1f} % | Spielraum: {spielraum_sector_after:,.2f} €)"
             if new_sector_weight > sector_limit_pct_input: hard_limit_ok = False
 
-            # 6. Sektor-Konzentration (KLUMPENRISIKO)
-            if high_concentration:
+            # 6. Sektor-Konzentration im Aktienanteil (RELEVANTER DROSSEL-CHECK)
+            if sector_share_equities_after > SOFT_CONCENTRATION_STOP:
                 c_conc = "🔴"
-                rating_str = "Hohe Konzentration innerhalb des Aktienanteils"
-            elif sector_share_equities_after > 35.0:
+                rating_str = f"Starke Sektorkonzentration ({sector_share_equities_after:.1f} % der Aktien)"
+            elif sector_share_equities_after > SOFT_CONCENTRATION_WARN:
                 c_conc = "🟡"
-                rating_str = "Moderate Konzentration innerhalb des Aktienanteils"
+                rating_str = f"Erhöhte Sektorkonzentration ({sector_share_equities_after:.1f} % der Aktien)"
             else:
                 c_conc = "🟢"
-                rating_str = "Gute Streuung innerhalb des Aktienanteils"
+                rating_str = f"Gute Streuung ({sector_share_equities_after:.1f} % der Aktien)"
 
             holdings_before_str = ", ".join(existing_sector_tickers) if existing_sector_tickers else "Keine"
             all_holdings = list(set(existing_sector_tickers + [sim_data['Ticker']]))
             holdings_after_str = " + ".join(all_holdings)
 
-            discipline_note = f"\n⚠️ **Kapital-Disziplin:** Reduzierte Kaufgröße empfohlen (**max. {max_recommended_buy:,.2f} €** statt geplanter {sim_amount:,.2f} €). Weiterer Nachkauf im Sektor `{sim_data['Sector']}` erst nach breiterer Aktien-Diversifikation." if high_concentration else ""
+            discipline_note = f"\n⚠️ **Kapital-Disziplin:** {drossel_reason}" if is_drossel_active else ""
 
-            check_sim = f"""{c_conc} **6. Sektor-Konzentration ({sim_data['Sector']}):**
-- **Vor Kauf:** {sector_weight_before:.1f} % des Gesamtdepots / {sector_share_equities_before:.1f} % der Aktien ({holdings_before_str})
+            check_sim = f"""{c_conc} **6. Sektor-Konzentration im Aktienanteil:**
+- **Vor Kauf:** {sector_weight_before:.1f} % Gesamtdepot / {sector_share_equities_before:.1f} % Aktien ({holdings_before_str})
 - **Simulierter Kauf:** +{sim_amount:,.2f} € (`{sim_data['Ticker']}`)
-- **Nach Kauf:** {new_sector_weight:.1f} % des Gesamtdepots / {sector_share_equities_after:.1f} % der Aktien ({holdings_after_str})
-- **Bewertung:** {c_conc} {rating_str}{discipline_note}"""
+- **Nach Kauf:** {new_sector_weight:.1f} % Gesamtdepot / {sector_share_equities_after:.1f} % Aktien ({holdings_after_str})
+- **Status:** {c_conc} {rating_str}{discipline_note}"""
 
             # 7. Erwartete Rendite
             c_ret = "🟢" if sim_data["raw_ret_3y"] >= 8.0 else "🟡"
-            check_ret = f"{c_ret} **7. Erwartete Rendite:** {sim_data['Netto-Rendite 3J']} (Neubewertungs-Anteil: {sim_data['Neubewertung_pa_3J']})"
+            check_ret = f"{c_ret} **7. Erwartete Rendite:** {sim_data['Netto-Rendite 3J']} (Neubewertung: {sim_data['Neubewertung_pa_3J']})"
 
             # 8. Modellrisiko & Confidence
             c_conf = "🟢" if sim_data["Confidence"] == "Hoch" else ("🟡" if sim_data["Confidence"] == "Mittel" else "🔴")
             check_conf = f"{c_conf} **8. Modellrisiko & Confidence:** Level {sim_data['Confidence']} ({sim_data['Plausibility_Status']})"
 
             # =========================================================
-            # NEUES ENDURTEIL (SAUBERE 4-STUFEN-DIFFERENZIERUNG)
+            # ENDURTEIL (3-STUFIGE DEPOT-LOGIK)
             # =========================================================
             if not hard_limit_ok or "🔴 Daten-/Modellwarnung" in sim_data["Plausibility_Status"] or sim_data["raw_mos"] <= 0:
-                st.error("### 🔴 KEIN KAUF\nℹ️ **Grund:** Hard Limit gerissen, Qualität zu schwach (<50) oder Bewertung unzureichend.")
-            elif high_concentration or sim_amount > max_recommended_buy:
-                st.warning(f"### 🟠 KAUF GEDROSSELT\nℹ️ **Empfehlungs-Anpassung:** Aktie fundamental sehr attraktiv, aber Sektor-Klumpenrisiko im Aktienanteil ist hoch ({sector_share_equities_after:.1f} %).  \n👉 **Empfohlene Kaufgröße:** Max. **{max_recommended_buy:,.2f} €** (statt {sim_amount:,.2f} €).")
-            elif "🟡" in sim_data["Plausibility_Status"] or new_sector_weight > (sector_limit_pct_input * 0.8) or sector_share_equities_after > 35.0:
-                st.warning("### 🟡 KAUF MÖGLICH\nℹ️ **Hinweis:** Kauf ist möglich, leichte Nebenbedingungen oder Modellhinweise beachten.")
+                st.error("### 🔴 KEIN KAUF / WARTEN\nℹ️ **Grund:** Hard Limit gerissen, Qualität unzureichend (<50) oder Bewertung ohne Puffer.")
+            elif is_drossel_active or sim_amount > max_recommended_buy:
+                st.warning(f"### 🟠 KAUF MÖGLICH – GEDROSSELT\nℹ️ **Depot-Hinweis:** Fundamental sehr attraktiv, aber Sektor-Konzentration im Aktienanteil ist hoch.  \n👉 **Empfohlene Tranche:** Max. **{max_recommended_buy:,.2f} €** (statt geplanter {sim_amount:,.2f} €), bis weitere Sektoren ins Portfolio aufgenommen wurden.")
+            elif "🟡" in sim_data["Plausibility_Status"]:
+                st.warning("### 🟡 KAUF MÖGLICH\nℹ️ **Hinweis:** Kauf ist möglich, leichte Modell- / Sektorhinweise beachten.")
             else:
-                st.success("### 🟢 KAUFEN\nℹ️ **Optimal:** Alle Kennzahlen grün, hervorragende Depot-Integration.")
+                st.success("### 🟢 NORMAL KAUFEN\nℹ️ **Optimal:** Alle Kennzahlen grün, hervorragende Depot-Integration und saubere Streuung.")
 
             # Prüfpunkte untereinander ausgeben
             cols_check1, cols_check2 = st.columns(2)
