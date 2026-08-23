@@ -44,7 +44,6 @@ def load_mock_universe():
                 "Ticker": "AXA",
                 "Name": "AXA SA",
                 "Sector": "Financial Services",
-                "Quality_Score": 89,
                 "Fair_Value": 62.15,
                 "Current_Price": 43.72,
                 "PER": 11.8,
@@ -55,7 +54,6 @@ def load_mock_universe():
                 "Ticker": "NVDA",
                 "Name": "NVIDIA Corp.",
                 "Sector": "Technology",
-                "Quality_Score": 92,
                 "Fair_Value": 110.00,
                 "Current_Price": 125.00,
                 "PER": 45.2,
@@ -66,7 +64,6 @@ def load_mock_universe():
                 "Ticker": "SAP.DE",
                 "Name": "SAP SE",
                 "Sector": "Technology",
-                "Quality_Score": 85,
                 "Fair_Value": 190.00,
                 "Current_Price": 195.00,
                 "PER": 32.0,
@@ -77,7 +74,6 @@ def load_mock_universe():
                 "Ticker": "AAPL",
                 "Name": "Apple Inc.",
                 "Sector": "Technology",
-                "Quality_Score": 90,
                 "Fair_Value": 220.00,
                 "Current_Price": 210.00,
                 "PER": 30.0,
@@ -88,7 +84,6 @@ def load_mock_universe():
                 "Ticker": "MSFT",
                 "Name": "Microsoft Corp.",
                 "Sector": "Technology",
-                "Quality_Score": 94,
                 "Fair_Value": 430.00,
                 "Current_Price": 415.00,
                 "PER": 34.0,
@@ -136,10 +131,10 @@ tab_a, tab_b, tab_c = st.tabs(
 )
 
 # ---------------------------------------------------------
-# TAB A: AKTIEN-ANALYSE
+# TAB A: AKTIEN-ANALYSE (MEHRKRITERIEN-BEWERTUNG)
 # ---------------------------------------------------------
 with tab_a:
-    st.header("Einzelaktien-Bewertung")
+    st.header("Einzelaktien-Bewertung nach Kriterien")
     selected_ticker = st.selectbox(
         "Aktie zur Analyse auswählen:", df_universe["Ticker"].tolist()
     )
@@ -150,8 +145,48 @@ with tab_a:
         / stock_data["Current_Price"]
     ) * 100
 
+    st.markdown("---")
+    st.markdown(
+        "**Bewerte die Aktie anhand verschiedener Qualitäts- und Fundamentalkriterien:**"
+    )
+
+    col_c1, col_c2 = st.columns(2)
+    with col_c1:
+        crit_fcf = st.checkbox(
+            "Positive Cashflow-Metriken", value=True, key="c_fcf"
+        )
+        crit_growth = st.checkbox(
+            "Starkes Gewinnwachstum (>10%)", value=True, key="c_growth"
+        )
+        crit_moat = st.checkbox(
+            "Intakter Trend / Momentum", value=True, key="c_moat"
+        )
+    with col_c2:
+        crit_balance = st.checkbox(
+            "Gesunde Bilanz / geringe Schulden", value=True, key="c_balance"
+        )
+        crit_margin = st.checkbox(
+            "Hohe operative Marge", value=False, key="c_margin"
+        )
+        crit_valuation = st.checkbox(
+            "Attraktive Bewertung (DCF/KGV)", value=True, key="c_val"
+        )
+
+    criteria_list = [
+        crit_fcf,
+        crit_growth,
+        crit_moat,
+        crit_balance,
+        crit_margin,
+        crit_valuation,
+    ]
+    score = sum(criteria_list)
+    max_score = len(criteria_list)
+    score_pct = int((score / max_score) * 100)
+
+    st.markdown("---")
     col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Quality Score", f"{stock_data['Quality_Score']} / 100")
+    col1.metric("Quality Score", f"{score_pct} / 100", delta=f"{score} von {max_score} Kriterien")
     col2.metric("Fair Value", f"{stock_data['Fair_Value']:.2f} €")
     col3.metric(
         "Aktueller Kurs",
@@ -159,6 +194,13 @@ with tab_a:
         delta=f"{mos:+.1f} % MOS",
     )
     col4.metric("KGV / Beta", f"{stock_data['PER']} | {stock_data['Beta']}")
+
+    if score_pct >= 80:
+        st.success("🟢 Starkes Setup: Aktie erfüllt die Mehrheit der Qualitätskriterien.")
+    elif score_pct >= 50:
+        st.warning("🟡 Moderates Setup: Einige Kriterien sind noch offen.")
+    else:
+        st.error("🔴 Schwaches Setup: Kriterien-Anforderungen nicht ausreichend erfüllt.")
 
     st.info(f"**Modell-Status:** {stock_data['Plausibility_Status']}")
 
@@ -176,33 +218,26 @@ with tab_b:
             match = df_universe[df_universe["Ticker"] == select_tick].iloc[0]
             default_ticker = match["Ticker"]
             default_name = match["Name"]
-            default_sector = match["Sector"]
+            default_sector = match["Sector"] if "Sector" in match else "Financial Services"
             default_price = float(match["Current_Price"])
         else:
             default_ticker = ""
             default_name = ""
-            default_sector = "Technology"
+            default_sector = "Financial Services"
             default_price = 0.0
 
         form_ticker = st.text_input("Ticker Symbol:", value=default_ticker)
         form_name = st.text_input("Name der Aktie:", value=default_name)
 
-        sectors_list = sorted(
-            list(
-                set(
-                    df_universe["Sector"].tolist()
-                    + [
-                        "Technology",
-                        "Financial Services",
-                        "Healthcare",
-                        "Industrials",
-                        "Consumer Discretionary",
-                        "Energy",
-                        "Sonstige",
-                    ]
-                )
-            )
-        )
+        sectors_list = [
+            "Financial Services",
+            "Technology",
+            "Healthcare",
+            "Industrials",
+            "Consumer Discretionary",
+            "Energy",
+            "Sonstige",
+        ]
         sector_idx = (
             sectors_list.index(default_sector)
             if default_sector in sectors_list
@@ -346,33 +381,32 @@ with tab_c:
         else 0
     )
 
-    # Anteil des Sektors AM GESAMTEN AKTIENDEPOT nach dem Kauf
     sector_share_in_stocks = (
         (new_sector_val / new_total_stock * 100) if new_total_stock > 0 else 0
     )
 
-    # 3-Stufige Depot-Logik & Sektor-Konzentration am Aktienanteil
+    # 3-Stufige Depot-Logik
     if sector_share_in_stocks > 80.0 and total_stock_value > 0:
-        tranche_status = "🔴 WARTEN (SEKTOR-KLUMPEN)"
+        tranche_status = "🔴 WARTEN"
         drossel_headline = "🔴 WARTEN – SEKTORBEREICH BEREITS ÜBERWIEGEND DOMINIERT"
         drossel_reason = f"Der Sektor `{sim_data['Sector']}` macht **{sector_share_in_stocks:.1f} %** deines Aktiendepots aus. Vorrang sollte der Aufbau anderer Sektoren haben."
         max_recommended_buy = 0.0
     elif sector_share_in_stocks >= 50.0 and total_stock_value > 0:
-        tranche_status = "🟠 GEDROSSELT KAUFEN"
+        tranche_status = "🟠 GEDROSSELT"
         drossel_headline = (
             "🟠 KAUF MÖGLICH – GEDROSSELTE ERST-TRANCHE (MAX. 1.000 €)"
         )
         drossel_reason = f"Fundamental attraktiv, aber Sektor `{sim_data['Sector']}` stellt bereits **{sector_share_in_stocks:.1f} %** des Aktienanteils."
         max_recommended_buy = min(1000.0, sim_amount)
     else:
-        tranche_status = "🟢 NORMAL KAUFEN"
+        tranche_status = "🟢 NORMAL"
         drossel_headline = "🟢 NORMAL KAUFEN – DIREKTES SETUP OPTIMAL"
         drossel_reason = f"Sektor `{sim_data['Sector']}` ist im Aktiendepot ausgeglichen gewichtet."
         max_recommended_buy = sim_amount
 
     st.divider()
     st.markdown(
-        f"### Simulation: Kauf von **{sim_amount:,.2f} €** in `{sim_data['Ticker']}` ({sim_data['Name']})"
+        f"### Simulation: Kauf von **{sim_amount:,.2f} €** in `{sim_data['Ticker']}`"
     )
 
     s1, s2, s3, s4 = st.columns(4)
