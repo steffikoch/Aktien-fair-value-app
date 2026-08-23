@@ -2,6 +2,7 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import numpy as np
+import requests
 
 # Page Config
 st.set_page_config(page_title="4-Score Depot Engine", layout="wide", page_icon="📈")
@@ -15,8 +16,59 @@ if "portfolio_data" not in st.session_state:
         {"Ticker": "LHA.DE", "Kaufkurs": 7.50, "Stueckzahl": 200, "Sektor": "Industrials / Aviation"},
         {"Ticker": "AAPL", "Kaufkurs": 175.00, "Stueckzahl": 20, "Sektor": "Technology"},
         {"Ticker": "MSFT", "Kaufkurs": 380.00, "Stueckzahl": 10, "Sektor": "Technology"},
-        {"Ticker": "COCO", "Kaufkurs": 54.50, "Stueckzahl": 50, "Sektor": "Consumer / Beverages"}
+        {"Ticker": "DTE.DE", "Kaufkurs": 22.00, "Stueckzahl": 50, "Sektor": "Telecommunication"}
     ])
+
+# =============================================================
+# HELPER: TICKER RESOLUTION (NAMEN IN TICKER UMWANDELN)
+# =============================================================
+def resolve_ticker_symbol(user_input):
+    user_input = user_input.strip()
+    if not user_input:
+        return None
+    
+    # Bekannte direkte Zuordnungen für häufige deutsche/internationale Namen
+    known_mappings = {
+        "DEUTSCHE TELEKOM": "DTE.DE",
+        "TELEKOM": "DTE.DE",
+        "LUFTHANSA": "LHA.DE",
+        "DEUTSCHE LUFTHANSA": "LHA.DE",
+        "ALLIANZ": "ALV.DE",
+        "BASF": "BAS.DE",
+        "BAYER": "BAYN.DE",
+        "BMW": "BMW.DE",
+        "SIEMENS": "SIE.DE",
+        "VOLKSWAGEN": "VOW3.DE",
+        "VW": "VOW3.DE",
+        "SAP": "SAP.DE",
+        "APPLE": "AAPL",
+        "MICROSOFT": "MSFT",
+        "NVIDIA": "NVDA",
+        "AMAZON": "AMZN",
+        "TESLA": "TSLA"
+    }
+    
+    upper_input = user_input.upper()
+    if upper_input in known_mappings:
+        return known_mappings[upper_input]
+
+    # Wenn es bereits wie ein Symbol aussieht (z.B. DTE.DE oder AAPL)
+    if "." in user_input or (len(user_input) <= 5 and user_input.isalpha()):
+        return user_input.upper()
+    
+    # Automatische Suche über Yahoo Finance API
+    try:
+        url = f"https://query2.finance.yahoo.com/v1/finance/search?q={user_input}"
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+        response = requests.get(url, headers=headers, timeout=5)
+        if response.status_code == 200:
+            data = response.json()
+            if "quotes" in data and len(data["quotes"]) > 0:
+                return data["quotes"][0]["symbol"]
+    except Exception:
+        pass
+    
+    return user_input.upper()
 
 # =============================================================
 # HELPER: STABILE 4-SCORE BERECHNUNG
@@ -26,7 +78,7 @@ def analyze_stock_4score(symbol, current_position_val, total_portfolio_val):
         stock = yf.Ticker(symbol)
         info = stock.info
         
-        price = info.get('currentPrice') or info.get('regularMarketPrice') or 0.0
+        price = info.get('currentPrice') or info.get('regularMarketPrice') or info.get('previousClose') or 0.0
         if not price or price <= 0:
             return None
 
@@ -178,7 +230,7 @@ def analyze_stock_4score(symbol, current_position_val, total_portfolio_val):
 # EINGABE-BEREICH IN DER SIDEBAR
 # =============================================================
 st.sidebar.header("⚙️ Eingabe & Depot-Kontext")
-ticker_input = st.sidebar.text_input("Aktien-Ticker:", value="LHA.DE").strip().upper()
+ticker_input = st.sidebar.text_input("Aktien-Name oder Ticker (z. B. DTE.DE, Deutsche Telekom, AAPL):", value="Deutsche Telekom").strip()
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("📊 Positions-Kontext")
@@ -189,11 +241,12 @@ depot_val_input = st.sidebar.number_input("Gesamtdepot-Wert (€):", min_value=1
 # HAUPTAUSWERTUNG
 # =============================================================
 if ticker_input:
-    with st.spinner(f"Analysiere {ticker_input} über die 4 Scores..."):
-        res = analyze_stock_4score(ticker_input, pos_val_input, depot_val_input)
+    with st.spinner(f"Suche & Analysiere '{ticker_input}'..."):
+        resolved_ticker = resolve_ticker_symbol(ticker_input)
+        res = analyze_stock_4score(resolved_ticker, pos_val_input, depot_val_input)
         
     if not res:
-        st.error("Konnte keine Daten für diesen Ticker abrufen.")
+        st.error(f"Konnte keine Daten für '{ticker_input}' (Kürzel: {resolved_ticker}) abrufen. Bitte überprüfe die Eingabe oder gib das genaue Börsenkürzel an (z. B. DTE.DE für Deutsche Telekom, LHA.DE für Lufthansa, AAPL für Apple).")
     else:
         # Auslesen der Werte
         price = res["price"]
@@ -220,7 +273,7 @@ if ticker_input:
             final_action = "🔴 KEIN KAUF (Fair Value nicht ausreichend vertrauenswürdig)"
             limits_active = False
         elif rc_score < 40 or mos < 10:
-            final_action = f"🟠 ABWARTEN (Erst bei höherem Sicherheitsrabatt interessant)"
+            final_action = "🟠 ABWARTEN (Erst bei höherem Sicherheitsrabatt interessant)"
             limits_active = True
         elif q_score >= 70 and mos >= 15:
             final_action = "🟢 NACHKAUF / POSITION AUFSTOCKEN"
