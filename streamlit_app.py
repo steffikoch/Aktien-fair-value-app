@@ -7,12 +7,10 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-# Exakter Titel wie auf deinem neuen Screenshot
-st.markdown(
-    "# 📈 Stock Valuation & Portfolio Capacity Engine"
-)
+# Titel genau wie gewünscht
+st.markdown("# 📈 Stock Valuation & Portfolio Capacity Engine")
 
-# Die exakten 3 Reiter mit ihren Original-Bezeichnungen
+# Die exakten 3 Reiter
 tab_a, tab_b, tab_c = st.tabs(
     [
         "🔍 Tab A: Aktien-Analyse",
@@ -22,7 +20,7 @@ tab_a, tab_b, tab_c = st.tabs(
 )
 
 # =========================================================
-# TAB A: AKTIEN-ANALYSE
+# TAB A: AKTIEN-ANALYSE & BEWERTUNG
 # =========================================================
 with tab_a:
     st.subheader("Einzelaktien-Bewertung & Risiko")
@@ -39,7 +37,14 @@ with tab_a:
     )
 
     st.markdown("---")
-    st.subheader("🧮 DCF Indikation")
+    st.subheader("🧮 Erweiterte Bewertung & DCF Indikation")
+    
+    col_val1, col_val2 = st.columns(2)
+    with col_val1:
+        pe_ratio = st.number_input("KGV (P/E Ratio):", value=18.5, step=0.5, key="ana_pe")
+    with col_val2:
+        eps = st.number_input("Gewinn je Aktie (€):", value=5.0, step=0.5, key="ana_eps")
+
     fcf = st.number_input(
         "Free Cash Flow (Mio. €):", value=500.0, step=50.0, key="ana_fcf"
     )
@@ -47,8 +52,14 @@ with tab_a:
     wacc = st.slider("WACC / Abzinsung (%):", 5.0, 15.0, 9.0, key="ana_wacc")
 
     fair_value = fcf * (1 + growth / 100) / (wacc / 100)
+    implied_value_eps = eps * pe_ratio
+
+    st.markdown("---")
     st.metric(
-        label="Fairer Wert (Indikation Mio. €)", value=f"{fair_value:,.2f} €"
+        label="Fairer Wert (DCF Indikation Mio. €)", value=f"{fair_value:,.2f} €"
+    )
+    st.metric(
+        label="Indikativer Kurs via KGV (EPS x KGV)", value=f"{implied_value_eps:,.2f} €"
     )
 
 
