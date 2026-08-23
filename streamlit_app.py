@@ -68,7 +68,6 @@ def analyze_stock_4score(symbol, current_position_val, total_portfolio_val):
         fcf = info.get('freeCashflow')
         eps_growth = (info.get('earningsGrowth') or 0.0) * 100
         rev_growth = (info.get('revenueGrowth') or 0.0) * 100
-        div_yield = (info.get('dividendYield') or 0.0) * 100
         beta = info.get('beta')
         total_cash = info.get('totalCash', 0) or 0
         total_debt = info.get('totalDebt', 0) or 0
@@ -158,15 +157,32 @@ def analyze_stock_4score(symbol, current_position_val, total_portfolio_val):
         mos = ((fair_value - price) / price) * 100 if fair_value > 0 else 0.0
 
         # -------------------------------------------------------------
-        # NETTO-RENDITEPROGNOSE (3-5 JAHRE p.a. / OHNE REINVESTITION)
+        # BUGFIX: DIVIDEND YIELD SANITIZATION & NETTO-RENDITE (CAGR)
         # -------------------------------------------------------------
+        raw_div_yield = info.get('dividendYield') or 0.0
+        # yfinance Sanitisierung (Skalierungsfehler abfangen)
+        if raw_div_yield > 1.0:
+            div_yield_gross = raw_div_yield
+        else:
+            div_yield_gross = raw_div_yield * 100.0
+
         TAX_RATE = 0.26375  # Abgeltungsteuer + Soli (DE)
-        
-        net_div_yield = div_yield * (1 - TAX_RATE)
-        gross_cap_gains_pa = max(0, medium_term_growth * 0.5) + (mos / 4.0)
-        net_cap_gains_pa = gross_cap_gains_pa * (1 - TAX_RATE)
-        
-        expected_return_pa_net = net_div_yield + net_cap_gains_pa
+        net_div_yield = div_yield_gross * (1.0 - TAX_RATE)
+
+        # Kursrendite p.a. (CAGR auf 3 und 5 Jahre)
+        if price > 0 and fair_value > price:
+            cap_gain_3y_gross = ((fair_value / price) ** (1 / 3) - 1) * 100
+            cap_gain_5y_gross = ((fair_value / price) ** (1 / 5) - 1) * 100
+        else:
+            cap_gain_3y_gross = 0.0
+            cap_gain_5y_gross = 0.0
+
+        net_cap_gain_3y = cap_gain_3y_gross * (1.0 - TAX_RATE)
+        net_cap_gain_5y = cap_gain_5y_gross * (1.0 - TAX_RATE)
+
+        # Gesamtrendite p.a. Netto (ohne Reinvestition der Dividenden)
+        total_ret_3y_net = net_cap_gain_3y + net_div_yield
+        total_ret_5y_net = net_cap_gain_5y + net_div_yield
 
         # -------------------------------------------------------------
         # SCORE 3: RISK & CAPITAL EFFICIENCY SCORE
@@ -217,10 +233,12 @@ def analyze_stock_4score(symbol, current_position_val, total_portfolio_val):
             "pos_status": pos_status,
             "net_margin": net_margin,
             "fcf_status": fcf_status,
-            "div_yield": div_yield,
+            "div_yield_gross": div_yield_gross,
             "net_div_yield": net_div_yield,
-            "net_cap_gains_pa": net_cap_gains_pa,
-            "expected_return_pa_net": expected_return_pa_net,
+            "net_cap_gain_3y": net_cap_gain_3y,
+            "net_cap_gain_5y": net_cap_gain_5y,
+            "total_ret_3y_net": total_ret_3y_net,
+            "total_ret_5y_net": total_ret_5y_net,
             "sector": sector
         }
     except Exception:
@@ -255,7 +273,7 @@ if ticker_input:
         rc_score = res["risk_cap_score"]
         fit_score = res["fit_score"]
         weight_pct = res["weight_pct"]
-        exp_ret_net = res["expected_return_pa_net"]
+        exp_ret_net = res["total_ret_5y_net"]
         
         limits_active = True
         
@@ -308,11 +326,31 @@ if ticker_input:
 
         st.markdown("---")
         
-        # Netto-Renditeprognose Highlight Box
-        ret_icon = "🟢" if exp_ret_net >= 5.0 else ("🟡" if exp_ret_net >= 3.0 else "🔴")
-        st.info(f"### 📈 Erwartete Netto-Rendite (3–5 Jahre): {ret_icon} **{exp_ret_net:.1f} % p.a. (nach Steuern)**\n"
-                f"*(Zusammensetzung: Netto-Dividende {res['net_div_yield']:.1f}% + Netto-Kursgewinn p.a. {res['net_cap_gains_pa']:.1f}% | Abgeltungsteuer 26,375% berücksichtigt)*")
+        # Netto-Renditeprognose Segment
+        ret_icon = "🟢" if res["total_ret_5y_net"] >= 5.0 else ("🟡" if res["total_ret_5y_net"] >= 3.0 else "🔴")
+        st.markdown(f"### {ret_icon} Erwartete Netto-Gesamtrendite p.a. (nach Steuern)")
+        
+        r_col1, r_col2 = st.columns(2)
+        with r_col1:
+            st.metric(
+                label=" Horizont 3 Jahre (p.a.)", 
+                value=f"{res['total_ret_3y_net']:.2f} %",
+                delta=f"Kurs: {res['net_cap_gain_3y']:.2f}% | Div: {res['net_div_yield']:.2f}%"
+            )
+        with r_col2:
+            st.metric(
+                label=" Horizont 5 Jahre (p.a.)", 
+                value=f"{res['total_ret_5y_net']:.2f} %",
+                delta=f"Kurs: {res['net_cap_gain_5y']:.2f}% | Div: {res['net_div_yield']:.2f}%"
+            )
 
+        st.caption(
+            "ℹ️ **Berechnungsgrundlage:** 26,375 % Abgeltungsteuer berücksichtigt. "
+            "**Ohne Reinvestition der Dividenden** (Ausschüttungen fließen als Liquidität zu). "
+            f"Brutto-Dividendenrendite: {res['div_yield_gross']:.2f}% → Netto: {res['net_div_yield']:.2f}%."
+        )
+
+        st.markdown("---")
         st.subheader("📊 DIE 4 SCORES")
         s1, s2, s3, s4 = st.columns(4)
         
