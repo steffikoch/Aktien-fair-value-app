@@ -71,11 +71,11 @@ with tab1:
                         if net_cash > 0:
                             net_cash_per_share = net_cash / shares
 
-                    # 2. Moderatere KGV-Staffelung (Bear: 25 / Base: 30 / Bull: 35)
+                    # 2. Reines Unternehmensmodelling (Ziel-KGVs)
                     growth_rate = max(0, earnings_growth * 100)
                     target_pe_base = min(30.0, max(15.0, 15.0 + (growth_rate * 0.4)))
-                    target_pe_bear = max(12.0, target_pe_base * 0.80)
-                    target_pe_bull = min(38.0, target_pe_base * 1.20)
+                    target_pe_bear = max(12.0, target_pe_base * 0.75)  # Rein fundamentaler Bear-Case
+                    target_pe_bull = min(38.0, target_pe_base * 1.25)
                     
                     # 3. Modelle Berechnen
                     eval_eps = forward_eps if (forward_eps and forward_eps > 0) else eps
@@ -104,27 +104,35 @@ with tab1:
                     if vals:
                         base_case = np.average(vals, weights=weights)
                         
-                        bear_eps_val = (eval_eps * target_pe_bear) + net_cash_per_share if eval_eps else base_case * 0.8
-                        bull_eps_val = (eval_eps * target_pe_bull) + net_cash_per_share if eval_eps else base_case * 1.2
-                        
-                        bear_case = min(bear_eps_val, base_case * 0.85)
-                        best_case = max(bull_eps_val, base_case * 1.15)
+                        # Bear und Bull rein fundamental (ohne Koppelung an Kauflimits)
+                        bear_case = (eval_eps * target_pe_bear) + net_cash_per_share if eval_eps else base_case * 0.80
+                        best_case = (eval_eps * target_pe_bull) + net_cash_per_share if eval_eps else base_case * 1.25
                         
                         margin_of_safety = ((base_case - current_price) / current_price) * 100
                     else:
                         base_case, bear_case, best_case = current_price, current_price, current_price
                         margin_of_safety = 0.0
 
+                    # 5. Fair-Value Quality Score (0 - 100 Punkte)
+                    score_growth = min(20, max(0, int(growth_rate * 0.8)))
+                    score_margin = min(20, max(0, int(profit_margins * 100 * 1.2)))
+                    score_cash = 20 if net_cash_per_share > 0 else 5
+                    score_valuation = min(20, max(0, int(10 + margin_of_safety * 0.4)))
+                    score_risk = 20 if (beta and beta < 1.0) else (10 if beta and beta < 1.5 else 5)
+                    
+                    total_score = min(100, score_growth + score_margin + score_cash + score_valuation + score_risk)
+
                     # Ergebnisse anzeigen
                     st.markdown("---")
                     st.header(f"Ergebnis für {info.get('shortName', ticker_input)}")
                     
-                    col1, col2, col3 = st.columns(3)
+                    col1, col2, col3, col4 = st.columns(4)
                     col1.metric("Aktueller Kurs", f"{current_price:.2f} {currency_symbol}")
-                    col2.metric("Qualitätsbereinigter Fair Value", f"{base_case:.2f} {currency_symbol}" if vals else "N/A")
+                    col2.metric("Qualitäts-Fair-Value", f"{base_case:.2f} {currency_symbol}" if vals else "N/A")
                     col3.metric("Sicherheitspuffer", f"{margin_of_safety:.1f} %" if vals else "0.0 %")
-                    
-                    # Exakte Ampel-Logik
+                    col4.metric("Quality-Score", f"{total_score} / 100 Points")
+
+                    # Ampel-Urteil
                     if not vals:
                         st.info("Urteil: **NEUTRAL / UNRENTABEL** (Keine ausreichenden Gewinne/FCF vorhanden)")
                     elif margin_of_safety > 30:
@@ -141,9 +149,21 @@ with tab1:
                     if net_cash_per_share > 0:
                         st.caption(f"💡 Enthält einen Net-Cash-Bonus von +{net_cash_per_share:.2f} {currency_symbol} je Aktie.")
 
-                    # Kauflimit-Rechner
+                    # Chance / Risiko Profile (Upside / Downside)
+                    if vals and current_price > 0:
+                        st.subheader("⚖️ Chance / Risiko-Profil (zum aktuellen Kurs)")
+                        upside_base = ((base_case - current_price) / current_price) * 100
+                        downside_bear = ((bear_case - current_price) / current_price) * 100
+                        upside_bull = ((best_case - current_price) / current_price) * 100
+
+                        cr1, cr2, cr3 = st.columns(3)
+                        cr1.metric("Bear-Case Downside", f"{downside_bear:+.1f} %", delta_color="inverse")
+                        cr2.metric("Fair Value Upside", f"{upside_base:+.1f} %")
+                        cr3.metric("Bull-Case Upside", f"{upside_bull:+.1f} %")
+
+                    # Kauflimit-Rechner (Entkoppelt von Bear-Case)
                     if vals:
-                        st.subheader("🎯 Kauflimit-Rechner (Staffeln & Limits)")
+                        st.subheader("🎯 Kauflimit-Rechner (Staffeln aus Fair Value)")
                         limit_10 = base_case * 0.90
                         limit_15 = base_case * 0.85
                         limit_20 = base_case * 0.80
@@ -163,15 +183,15 @@ with tab1:
                         })
                         st.table(limits_df)
 
-                    # Szenarien
-                    st.subheader("Szenarien")
+                    # Szenarien Details
+                    st.subheader("📌 Unternehmens-Szenarien")
                     sc1, sc2, sc3 = st.columns(3)
-                    sc1.metric("Bear-Case (Konservativ)", f"{bear_case:.2f} {currency_symbol}" if vals else "N/A")
-                    sc2.metric("Base-Case (Realistisch)", f"{base_case:.2f} {currency_symbol}" if vals else "N/A")
-                    sc3.metric("Best-Case (Optimistisch)", f"{best_case:.2f} {currency_symbol}" if vals else "N/A")
+                    sc1.metric("Bear-Case (Konservativ)", f"{bear_case:.2f} {currency_symbol}")
+                    sc2.metric("Base-Case (Realistisch)", f"{base_case:.2f} {currency_symbol}")
+                    sc3.metric("Best-Case (Optimistisch)", f"{best_case:.2f} {currency_symbol}")
 
-                    # Einzelne Modelle Detail
-                    st.subheader("Modell-Details")
+                    # Modell-Details
+                    st.subheader("📐 Modell-Details")
                     st.write(f"- **DCF/Gewinn-Modell:** {f'{dcf_val:.2f} {currency_symbol}' if dcf_val else 'N/A'}")
                     st.write(f"- **KGV-Modell (Ziel-KGV {target_pe_base:.1f}):** {f'{kgv_val:.2f} {currency_symbol}' if kgv_val else 'N/A'}")
                     st.write(f"- **FCF-Modell (Höher gewichtet bei Marge > 10%):** {f'{fcf_val:.2f} {currency_symbol}' if fcf_val else 'N/A'}")
