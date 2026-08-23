@@ -19,32 +19,18 @@ def get_initial_portfolio():
     return pd.DataFrame(
         [
             {
-                "Ticker": "AAPL",
-                "Name": "Apple Inc.",
-                "Sector": "Technology",
-                "Shares": 15.0,
-                "Price_EUR": 210.00,
-            },
-            {
-                "Ticker": "MSFT",
-                "Name": "Microsoft Corp.",
-                "Sector": "Technology",
-                "Shares": 8.0,
-                "Price_EUR": 415.00,
+                "Ticker": "AXA",
+                "Name": "AXA SA",
+                "Sector": "Financial Services",
+                "Shares": 188.0,
+                "Price_EUR": 43.73,
             },
             {
                 "Ticker": "ALV.DE",
                 "Name": "Allianz SE",
                 "Sector": "Financial Services",
-                "Shares": 20.0,
-                "Price_EUR": 260.00,
-            },
-            {
-                "Ticker": "NOVN.SW",
-                "Name": "Novartis AG",
-                "Sector": "Healthcare",
-                "Shares": 30.0,
-                "Price_EUR": 92.00,
+                "Shares": 10.0,
+                "Price_EUR": 450.00,
             },
         ]
     )
@@ -126,13 +112,13 @@ df_universe = load_mock_universe()
 st.sidebar.header("⚙️ Depot-Parameter")
 
 cash_balance = st.sidebar.number_input(
-    "Cash-Bestand (€)", value=25000.0, step=1000.0
+    "Cash-Bestand (€)", value=55000.0, step=1000.0
 )
 target_stock_quote_max = st.sidebar.slider(
     "Max. Ziel-Aktienquote (%)", 10.0, 100.0, 50.0
 )
 limit_pct_input = st.sidebar.slider(
-    "Max. Einzelposition (% vom Depot)", 1.0, 20.0, 5.0
+    "Max. Einzelposition (% vom Depot)", 1.0, 20.0, 10.0
 )
 sector_limit_pct_input = st.sidebar.slider(
     "Max. Sektor-Limit (% vom Gesamtdepot)", 5.0, 50.0, 25.0
@@ -182,7 +168,6 @@ with tab_a:
 with tab_b:
     st.header("Aktueller Depot-Status & Verwaltung")
 
-    # --- FORMULAR ZUM HINZUFÜGEN / BEARBEITEN ---
     with st.expander("➕ Position hinzufügen oder anpassen", expanded=True):
         all_tickers = df_universe["Ticker"].tolist() + ["Manuell eintragen"]
         select_tick = st.selectbox("Aktie auswählen:", all_tickers)
@@ -253,7 +238,6 @@ with tab_b:
                 st.success(f"Position {form_ticker} gespeichert!")
                 st.rerun()
 
-    # --- LISTE DER BESTEHENDEN POSITIONEN ---
     st.subheader("Bestehende Positionen")
 
     col_b1, col_b2 = st.columns(2)
@@ -329,10 +313,6 @@ with tab_c:
     sim_data = df_universe[df_universe["Ticker"] == sim_ticker].iloc[
         0
     ].to_dict()
-    sim_data["raw_mos"] = (
-        (sim_data["Fair_Value"] - sim_data["Current_Price"])
-        / sim_data["Current_Price"]
-    ) * 100
 
     if not df_portfolio.empty:
         existing_pos_val = df_portfolio[df_portfolio["Ticker"] == sim_ticker][
@@ -365,57 +345,30 @@ with tab_c:
         if new_total_portfolio > 0
         else 0
     )
-    sector_share_equities_after = (
+
+    # Anteil des Sektors AM GESAMTEN AKTIENDEPOT nach dem Kauf
+    sector_share_in_stocks = (
         (new_sector_val / new_total_stock * 100) if new_total_stock > 0 else 0
     )
 
-    max_pos_eur = total_portfolio_value * (limit_pct_input / 100.0)
-    max_sector_eur = total_portfolio_value * (sector_limit_pct_input / 100.0)
-    max_target_eur = total_portfolio_value * (
-        target_stock_quote_max / 100.0
-    )
-
-    hard_limit_ok = (
-        new_pos_val <= max_pos_eur
-        and new_sector_val <= max_sector_eur
-        and new_total_stock <= max_target_eur
-    )
-
-    raw_hard_limit_space = max(
-        0.0,
-        min(
-            max_pos_eur - existing_pos_val,
-            max_sector_eur - existing_sector_val,
-            max_target_eur - total_stock_value,
-        ),
-    )
-
-    sec_share = sector_share_equities_after
-
-    if sec_share > 50.0:
+    # 3-Stufige Depot-Logik & Sektor-Konzentration am Aktienanteil
+    if sector_share_in_stocks > 80.0 and total_stock_value > 0:
+        tranche_status = "🔴 WARTEN (SEKTOR-KLUMPEN)"
+        drossel_headline = "🔴 WARTEN – SEKTORBEREICH BEREITS ÜBERWIEGEND DOMINIERT"
+        drossel_reason = f"Der Sektor `{sim_data['Sector']}` macht **{sector_share_in_stocks:.1f} %** deines Aktiendepots aus. Vorrang sollte der Aufbau anderer Sektoren haben."
         max_recommended_buy = 0.0
-        is_drossel_active = True
-        tranche_status = "🔴 SEKTOR-SPERRE"
-        drossel_headline = "🔴 SEKTOR-SPERRE"
-        drossel_reason = f"Sektor `{sim_data['Sector']}` macht **{sec_share:.1f} %** deines Aktienportfolios aus (> 50 %)."
-    elif sec_share >= 40.0:
-        max_recommended_buy = min(1000.0, raw_hard_limit_space)
-        is_drossel_active = True
-        tranche_status = "🟠 GEDROSSELTE TRANCHE"
-        drossel_headline = f"🟠 KAUF MÖGLICH – GEDROSSELTE ERST-TRANCHE (MAX. {max_recommended_buy:,.0f} €)"
-        drossel_reason = f"Sektor `{sim_data['Sector']}` stellt **{sec_share:.1f} %** deines Aktienportfolios."
-    elif sec_share >= 30.0:
-        max_recommended_buy = min(1500.0, raw_hard_limit_space)
-        is_drossel_active = True
-        tranche_status = "🟡 ERST-TRANCHE"
-        drossel_headline = "🟡 KAUF MÖGLICH – ERST-TRANCHE BEACHTEN"
-        drossel_reason = f"Sektor `{sim_data['Sector']}` erreicht **{sec_share:.1f} %** des Aktienportfolios."
+    elif sector_share_in_stocks >= 50.0 and total_stock_value > 0:
+        tranche_status = "🟠 GEDROSSELT KAUFEN"
+        drossel_headline = (
+            "🟠 KAUF MÖGLICH – GEDROSSELTE ERST-TRANCHE (MAX. 1.000 €)"
+        )
+        drossel_reason = f"Fundamental attraktiv, aber Sektor `{sim_data['Sector']}` stellt bereits **{sector_share_in_stocks:.1f} %** des Aktienanteils."
+        max_recommended_buy = min(1000.0, sim_amount)
     else:
-        max_recommended_buy = raw_hard_limit_space
-        is_drossel_active = False
-        tranche_status = "🟢 UNBESCHRÄNKT"
-        drossel_headline = "🟢 NORMAL KAUFEN"
-        drossel_reason = f"Sektor `{sim_data['Sector']}` ist mit **{sec_share:.1f} %** optimal diversifiziert."
+        tranche_status = "🟢 NORMAL KAUFEN"
+        drossel_headline = "🟢 NORMAL KAUFEN – DIREKTES SETUP OPTIMAL"
+        drossel_reason = f"Sektor `{sim_data['Sector']}` ist im Aktiendepot ausgeglichen gewichtet."
+        max_recommended_buy = sim_amount
 
     st.divider()
     st.markdown(
@@ -431,26 +384,25 @@ with tab_c:
     s2.metric(
         "Positionsgewicht",
         f"{new_pos_weight:.1f} %",
-        delta=f"Max: {limit_pct_input:.1f}%",
+        delta=f"Max: {limit_pct_input}%",
     )
     s3.metric(
-        "Sektoranteil",
-        f"{sec_share:.1f} %",
-        delta="Schwelle: 40 %",
-        delta_color="inverse" if sec_share >= 40 else "normal",
+        "Sektor im Aktiendepot",
+        f"{sector_share_in_stocks:.1f} %",
+        delta="Schwelle: 50 %",
+        delta_color="inverse"
+        if sector_share_in_stocks >= 50
+        else "normal",
     )
     s4.metric(
-        "Max. Erst-Tranche",
-        f"{max_recommended_buy:,.0f} €",
-        delta=tranche_status,
-        delta_color="inverse" if is_drossel_active else "normal",
+        "Empfehlung",
+        tranche_status,
+        delta=f"Max: {max_recommended_buy:,.0f} €",
     )
 
-    if not hard_limit_ok or sim_amount > (max_recommended_buy + 0.01):
-        st.error(
-            f"### 🔴 KAUFVOLUMEN BLOCKIERT\nℹ️ Max. erlaubte Erst-Tranche: **{max_recommended_buy:,.2f} €**"
-        )
-    elif is_drossel_active:
+    if sector_share_in_stocks > 80.0 and total_stock_value > 0:
+        st.error(f"### {drossel_headline}\nℹ️ {drossel_reason}")
+    elif sector_share_in_stocks >= 50.0 and total_stock_value > 0:
         st.warning(f"### {drossel_headline}\nℹ️ {drossel_reason}")
     else:
-        st.success(f"### {drossel_headline}\nℹ️ Alle Kennzahlen grün.")
+        st.success(f"### {drossel_headline}\nℹ️ {drossel_reason}")
