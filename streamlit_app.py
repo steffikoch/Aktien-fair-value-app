@@ -1,16 +1,17 @@
 import pandas as pd
 import streamlit as st
 
-# Layout auf 'centered' stellen für mobile Bildschirme
 st.set_page_config(
-    page_title="Stock Manager", layout="centered", initial_sidebar_state="collapsed"
+    page_title="Stock Valuation & Portfolio Manager",
+    layout="centered",
+    initial_sidebar_state="collapsed",
 )
 
-# Kürzere Tab-Namen für kompakte Smartphone-Anzeige
-tab1, tab2, tab3 = st.tabs(["📊 Depot", "🧮 DCF", "⚙️ Stop-Loss"])
+# Native Reiter oben auf der Seite für einfache Bedienung auf dem Smartphone
+tab1, tab2, tab3 = st.tabs(["📊 Depot & Klumpen", "🧮 DCF Rechner", "⚙️ Stop-Loss"])
 
 # =========================================================
-# TAB 1: DEPOT & KLUMPENRISIKO
+# TAB 1: DEPOT-INTEGRATION & KLUMPENRISIKO-PRÜFUNG
 # =========================================================
 with tab1:
     st.subheader("Depot- & Kaufgrößen-Prüfung")
@@ -49,22 +50,24 @@ with tab1:
         "ALV.DE": ("Allianz SE", "Finanzen"),
         "ALLIANZ": ("Allianz SE", "Finanzen"),
         "CS.PA": ("AXA SA", "Finanzen"),
+        "AXA": ("AXA SA", "Finanzen"),
         "MUV2.DE": ("Münchener Rück", "Finanzen"),
         "DTE.DE": ("Deutsche Telekom", "Telekommunikation"),
+        "ZSCALER": ("Zscaler", "Technologie"),
         "AAPL": ("Apple Inc.", "Technologie"),
+        "MSFT": ("Microsoft Corp.", "Technologie"),
     }
 
-    MAX_POSITION_WEIGHT = 5.0
-    MAX_SEKTOR_WEIGHT = 20.0
+    MAX_POSITION_WEIGHT = 5.0  # Max. 5% pro Einzelwert
+    MAX_SEKTOR_WEIGHT = 20.0  # Max. 20% pro Sektor
     TARGET_AKTIENQUOTE = 50.0
 
     if "sim_ticker" not in st.session_state:
         st.session_state.sim_ticker = "ALV.DE"
 
-    # Untereinander statt nebeneinander für Smartphones
     sim_ticker_input = (
         st.text_input(
-            "Aktie (Ticker):",
+            "Zu simulierende Aktie (Ticker):",
             value=st.session_state.sim_ticker,
             key="t1_input",
         )
@@ -73,14 +76,14 @@ with tab1:
     )
 
     buy_amount = st.number_input(
-        "Kaufsumme (€):",
+        "Geplante Kaufsumme (€):",
         value=1000.0,
         step=100.0,
         min_value=0.0,
         key="t1_amount",
     )
 
-    # Schnellwahl-Buttons
+    # Schnellwahl-Buttons für Smartphone
     col_b1, col_b2, col_b3 = st.columns(3)
     if col_b1.button("🔄 Allianz"):
         st.session_state.sim_ticker = "ALV.DE"
@@ -120,7 +123,6 @@ with tab1:
         f"**Simulation:** {buy_amount:,.0f} € in **{sim_ticker_input}** ({stock_name})"
     )
 
-    # Kennzahlen übersichtlich untereinander/kompakt
     st.metric(
         label=f"Sektoranteil ({stock_sektor})",
         value=f"{neuer_sektor_anteil:.1f} %",
@@ -130,21 +132,21 @@ with tab1:
 
     st.metric(label="Positionsgewicht", value=f"{neues_positionsgewicht:.1f} %")
     if neues_positionsgewicht > MAX_POSITION_WEIGHT:
-        st.error(f"⚠️ Max. {MAX_POSITION_WEIGHT}% erlaubt!")
+        st.error(f"⚠️ Einzelwert-Limit ({MAX_POSITION_WEIGHT}%) überschritten!")
 
     if neuer_sektor_anteil > MAX_SEKTOR_WEIGHT:
         st.error(
-            f"**Sektorkonzentration:** Sektor **'{stock_sektor}'** klettert auf **{neuer_sektor_anteil:.1f}%** (Limit: {MAX_SEKTOR_WEIGHT}%)."
+            f"**Sektorkonzentration:** Sektor **'{stock_sektor}'** steigt auf **{neuer_sektor_anteil:.1f}%** (Erlaubt: max. {MAX_SEKTOR_WEIGHT}%)."
         )
     elif neues_positionsgewicht <= MAX_POSITION_WEIGHT:
-        st.success("✅ Kauf liegt innerhalb der Risikogrenzen.")
+        st.success("✅ Kauf liegt innerhalb aller Risikogrenzen.")
 
 
 # =========================================================
-# TAB 2: DCF RECHNER
+# TAB 2: DCF & BEWERTUNG
 # =========================================================
 with tab2:
-    st.subheader("🧮 DCF Bewertung")
+    st.subheader("🧮 DCF & Aktienbewertung")
 
     fcf = st.number_input(
         "Free Cash Flow (Mio. €):", value=500.0, step=50.0, key="dcf_fcf"
@@ -157,6 +159,7 @@ with tab2:
     )
 
     fair_value_demo = fcf * (1 + growth_rate / 100) / (discount_rate / 100)
+
     st.markdown("---")
     st.metric(
         label="Fairer Wert (Indikation Mio. €)",
@@ -165,7 +168,7 @@ with tab2:
 
 
 # =========================================================
-# TAB 3: TRAILING-STOP
+# TAB 3: STOP-LOSS & RISIKOMANAGEMENT
 # =========================================================
 with tab3:
     st.subheader("⚙️ Trailing-Stop Rechner")
@@ -183,4 +186,4 @@ with tab3:
     st.metric(
         label="Berechneter Stop-Loss Kurs", value=f"{calculated_stop:.2f} €"
     )
-    st.caption(f"Max. Verlust: -{stop_pct:.1f}%")
+    st.caption(f"Maximaler Verlust bei Auslösung: -{stop_pct:.1f}%")
