@@ -2,6 +2,7 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import numpy as np
+import requests
 
 # Page Config
 st.set_page_config(page_title="Depot-Steuerungs-Engine", layout="wide", page_icon="📈")
@@ -9,6 +10,26 @@ st.set_page_config(page_title="Depot-Steuerungs-Engine", layout="wide", page_ico
 # Überschrift & Untertitel
 st.title("📈 Depot-Steuerungs-Engine")
 st.caption("Depotvergleich – 65.000 € Basis | 10 % Einzelpositionslimit | 1.000 € Sparer-Pauschbetrag")
+
+# =============================================================
+# HELPER: AUTOMATISCHE TICKER-SUCHE
+# =============================================================
+def search_ticker(query):
+    """Sucht nach Unternehmensnamen/Kürzeln und gibt das beste Yahoo-Ticker-Symbol zurück."""
+    clean_query = query.strip()
+    if not clean_query:
+        return ""
+    try:
+        url = f"https://query2.finance.yahoo.com/v1/finance/search?q={clean_query}"
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        response = requests.get(url, headers=headers, timeout=5)
+        data = response.json()
+        
+        if data.get('quotes') and len(data['quotes']) > 0:
+            return data['quotes'][0]['symbol']
+    except Exception:
+        pass
+    return clean_query.upper()
 
 # =============================================================
 # HELPER: ENHANCED 4-SCORE BERECHNUNG MIT G&V
@@ -60,7 +81,7 @@ def analyze_stock_4score(symbol, shares_count, buy_price, total_portfolio_val, m
         r_score = 15 if beta and beta < 1.0 else (9 if beta and beta < 1.3 else 3)
         quality_score = min(100, p_score + g_score + b_score + c_score + r_score)
 
-        # 2. Fair Value
+        # 2. Fair Value (Rein fundamental)
         target_pe = min(22.0, max(11.0, 12.0 + (max(0, medium_term_growth) * 0.4)))
         fv_vals = []
         if eps > 0: fv_vals.append((eps * target_pe) + max(0, net_cash_ps))
@@ -69,7 +90,7 @@ def analyze_stock_4score(symbol, shares_count, buy_price, total_portfolio_val, m
         fair_value = np.mean(fv_vals) if fv_vals else price
         mos = ((fair_value - price) / price) * 100 if fair_value > 0 else 0.0
 
-        # 3. Netto-Rendite
+        # 3. Netto-Rendite (inkl. Sparer-Pauschbetrag)
         raw_div_yield = info.get('dividendYield') or 0.0
         div_yield_gross = raw_div_yield if raw_div_yield > 1.0 else raw_div_yield * 100.0
         cap_gain_5y_gross = (((fair_value / price) ** (1 / 5) - 1) * 100) if (price > 0 and fair_value > price) else 0.0
@@ -88,7 +109,7 @@ def analyze_stock_4score(symbol, shares_count, buy_price, total_portfolio_val, m
 
         ret_5y_no_drip = net_cap_gain_5y + net_div_yield
 
-        # 4. Depot-Allokation & Kapazität
+        # 4. Depot-Allokation & Freie Kapazität
         weight_pct = (current_position_val / total_portfolio_val * 100) if total_portfolio_val > 0 else 0.0
         max_allowed_val = (max_weight_limit / 100.0) * total_portfolio_val
         remaining_cap_eur = max(0.0, max_allowed_val - current_position_val)
@@ -147,31 +168,35 @@ st.sidebar.markdown("---")
 st.sidebar.subheader("➕ Aktie hinzufügen / bearbeiten")
 
 if "portfolio" not in st.session_state:
-    # Beispiel mit Münchener Rück
     st.session_state.portfolio = [
-        {"ticker": "MUV2.DE", "shares": 15.0, "buy_price": 507.08}
+        {"ticker": "MUV2.DE", "shares": 14.0, "buy_price": 543.30}
     ]
 
-new_ticker = st.sidebar.text_input("Ticker (z. B. MUV2.DE, DTE.DE):", value="").strip().upper()
+input_search = st.sidebar.text_input("Name oder Ticker (z. B. Münchener Rück, DTE.DE):", value="").strip()
 new_shares = st.sidebar.number_input("Stückzahl:", min_value=0.0, value=0.0, step=1.0)
 new_buy_price = st.sidebar.number_input("Kaufkurs pro Aktie (€):", min_value=0.0, value=0.0, step=1.0)
 
 if st.sidebar.button("Aktie speichern / aktualisieren"):
-    if new_ticker and new_shares > 0 and new_buy_price > 0:
-        found = False
-        for item in st.session_state.portfolio:
-            if item["ticker"] == new_ticker:
-                item["shares"] = new_shares
-                item["buy_price"] = new_buy_price
-                found = True
-                break
-        if not found:
-            st.session_state.portfolio.append({
-                "ticker": new_ticker, 
-                "shares": new_shares, 
-                "buy_price": new_buy_price
-            })
-        st.sidebar.success(f"{new_ticker} gespeichert!")
+    if input_search and new_shares > 0 and new_buy_price > 0:
+        with st.sidebar.status("Suche Ticker-Symbol..."):
+            resolved_ticker = search_ticker(input_search)
+        
+        if resolved_ticker:
+            found = False
+            for item in st.session_state.portfolio:
+                if item["ticker"] == resolved_ticker:
+                    item["shares"] = new_shares
+                    item["buy_price"] = new_buy_price
+                    found = True
+                    break
+            if not found:
+                st.session_state.portfolio.append({
+                    "ticker": resolved_ticker, 
+                    "shares": new_shares, 
+                    "buy_price": new_buy_price
+                })
+            st.sidebar.success(f"{resolved_ticker} ({input_search}) gespeichert!")
+            st.rerun()
 
 # Löschfunktion
 if st.session_state.portfolio:
@@ -206,7 +231,6 @@ for item in st.session_state.portfolio:
 if results:
     df_raw = pd.DataFrame(results)
     
-    # Aufbereitung der Ansichtstabelle
     display_cols = [
         "Ticker", "Name", "Stückzahl", "Kaufkurs", "Akt. Kurs", 
         "Einstand (€)", "Akt. Wert (€)", "G&V Total", 
@@ -215,7 +239,6 @@ if results:
     ]
     st.dataframe(df_raw[display_cols], use_container_width=True)
     
-    # Summenberechnungen
     total_cost = df_raw["raw_cost_basis"].sum()
     total_current_val = df_raw["raw_current_val"].sum()
     total_pnl_eur = df_raw["raw_pnl"].sum()
@@ -224,7 +247,6 @@ if results:
     cash_left = max(0.0, depot_val_input - total_current_val)
     allocated_pct = (total_current_val / depot_val_input) * 100
     
-    # Status der Aktienquote
     if allocated_pct < target_stock_quote_min:
         quote_status = f"🟢 {allocated_pct:.1f}% (Unterhalb Zielbereich {target_stock_quote_min}-{target_stock_quote_max}%)"
     elif allocated_pct <= target_stock_quote_max:
@@ -243,4 +265,4 @@ if results:
     
     st.info(f"**Aktienquote Status:** {quote_status}")
 else:
-    st.info("Keine Aktien im Portfolio. Füge Ticker über die Sidebar hinzu.")
+    st.info("Keine Aktien im Portfolio. Füge Ticker oder Namen über die Sidebar hinzu.")
