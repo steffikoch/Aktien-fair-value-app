@@ -120,7 +120,7 @@ with tab1:
                         base_case, bear_case, best_case = current_price, current_price, current_price
                         margin_of_safety = 0.0
 
-                    # 5. Quality Score (Entkoppelt von Bewertung)
+                    # 5. Quality Score
                     score_growth = min(20, max(0, int(growth_rate * 0.8)))
                     score_margin = min(20, max(0, int(profit_margins * 100 * 1.2)))
                     score_cash = 20 if net_cash_per_share > 0 else 5
@@ -128,6 +128,9 @@ with tab1:
                     score_risk = 20 if (beta and beta < 1.0) else (10 if beta and beta < 1.5 else 5)
                     
                     quality_score = min(100, score_growth + score_margin + score_cash + score_balance + score_risk)
+
+                    # Kauflimits Vorberechnen
+                    limit_15 = base_case * 0.85 if vals else 0.0
 
                     # Ergebnisse anzeigen
                     st.markdown("---")
@@ -154,29 +157,43 @@ with tab1:
                     else:
                         st.error(f"🔴 **VERKAUFEN / ÜBERBEWERTET** | Kurs liegt {abs(margin_of_safety):.1f}% über dem Fair Value.")
 
+                    # "Warum?"-Erklärungsblock
+                    if vals:
+                        with st.expander("💡 Warum dieses Urteil? (Schnell-Analyse)"):
+                            st.write(f"- **Qualität:** {'🟢' if quality_score >= 80 else ('🟡' if quality_score >= 70 else '🔴')} Quality Score **{quality_score}/100**")
+                            st.write(f"- **Bewertung:** {'🟢' if margin_of_safety >= 20 else ('🟠' if margin_of_safety >= 0 else '🔴')} Sicherheitsmarge **+{margin_of_safety:.1f}%**")
+                            downside_bear_val = ((bear_case - current_price) / current_price) * 100
+                            st.write(f"- **Bear-Risiko:** {'🔴' if downside_bear_val < -20 else '🟡'} **{downside_bear_val:.1f}%**")
+                            pe_val_str = f"{pe_ratio:.1f}x" if pe_ratio else "N/A"
+                            st.write(f"- **KGV-Niveau:** {'🔴' if pe_ratio and pe_ratio > 30 else '🟢'} **{pe_val_str}**")
+                            st.write(f"- **Net Cash:** {'🟢' if net_cash_per_share > 0 else '⚪'} **+{net_cash_per_share:.2f} {currency_symbol} / Aktie**")
+                            st.write(f"- **Erster Einstieg (15% Marge):** **{limit_15:.2f} {currency_symbol}**")
+
                     if net_cash_per_share > 0:
                         st.caption(f"💡 Enthält einen Net-Cash-Bonus von +{net_cash_per_share:.2f} {currency_symbol} je Aktie.")
 
-                    # Chance / Risiko Profile (Upside / Downside)
+                    # Chance / Risiko Profile (RRR Base vs Bull)
                     if vals and current_price > 0:
-                        st.subheader("⚖️ Chance / Risiko-Profil (zum aktuellen Kurs)")
+                        st.subheader("⚖️ Chance / Risiko-Profil")
                         upside_base = ((base_case - current_price) / current_price) * 100
                         downside_bear = ((bear_case - current_price) / current_price) * 100
                         upside_bull = ((best_case - current_price) / current_price) * 100
                         
-                        rrr = abs(upside_bull / downside_bear) if downside_bear != 0 else 0
+                        abs_bear = abs(downside_bear) if downside_bear != 0 else 1.0
+                        rrr_base = upside_base / abs_bear if upside_base > 0 else 0.0
+                        rrr_bull = upside_bull / abs_bear if upside_bull > 0 else 0.0
 
-                        cr1, cr2, cr3, cr4 = st.columns(4)
-                        cr1.metric("Bear-Case Downside", f"{downside_bear:+.1f} %", delta_color="inverse")
+                        cr1, cr2, cr3, cr4, cr5 = st.columns(5)
+                        cr1.metric("Bear Downside", f"{downside_bear:+.1f} %", delta_color="inverse")
                         cr2.metric("Fair Value Upside", f"{upside_base:+.1f} %")
-                        cr3.metric("Bull-Case Upside", f"{upside_bull:+.1f} %")
-                        cr4.metric("Chance/Risiko-Ratio (RRR)", f"{rrr:.2f}x")
+                        cr3.metric("Bull Upside", f"{upside_bull:+.1f} %")
+                        cr4.metric("RRR (Base Case)", f"{rrr_base:.2f}x")
+                        cr5.metric("RRR (Bull Case)", f"{rrr_bull:.2f}x")
 
                     # Kauflimit-Rechner
                     if vals:
                         st.subheader("🎯 Kauflimit-Rechner (Staffeln aus Fair Value)")
                         limit_10 = base_case * 0.90
-                        limit_15 = base_case * 0.85
                         limit_20 = base_case * 0.80
                         limit_25 = base_case * 0.75
                         limit_30 = base_case * 0.70
@@ -194,11 +211,13 @@ with tab1:
                         })
                         st.table(limits_df)
                         
-                        # Qualitäts-Achtung bei Kursrückgang
-                        if earnings_growth < 0 or profit_margins < 0.05:
-                            st.warning("⚠️ **Achtung:** Kauflimits nur gültig, wenn der Kursrückgang rein marktbedingt ist. Bei fallenden Gewinnen/Margen müssen die Limits neu berechnet werden!")
+                        # Dreistufige Regel zur Qualitätskontrolle bei Limits
+                        if quality_score >= 80:
+                            st.success("🟢 **Quality Rule:** Kauflimits sind VOLL AKTIV (Starkes Qualitätsunternehmen).")
+                        elif quality_score >= 70:
+                            st.warning("🟡 **Quality Rule:** Kauflimits sind AKTIV, jedoch wird eine REDUZIERTE POSITIONSGRÖSSE empfohlen.")
                         else:
-                            st.info("💡 **Qualitäts-Regel:** Kauflimits sind gültig, solange der Quality Score stark bleibt (z. B. > 70/100).")
+                            st.error("🔴 **Quality Rule:** Kauflimits AUSGESETZT! (Quality Score < 70). Erst fundamentale Erholung abwarten.")
 
                     # Szenarien Details & Treiber
                     st.subheader("📌 Fundamentale Szenarien & Treiber")
@@ -217,6 +236,7 @@ with tab1:
                             f"Errechneter Wert": [f"{bear_case:.2f} {currency_symbol}", f"{base_case:.2f} {currency_symbol}", f"{best_case:.2f} {currency_symbol}"]
                         })
                         st.table(drivers_df)
+                        st.caption("ℹ️ **Hinweis zum Bull Case:** Setzt sowohl überdurchschnittliches EPS-Wachstum als auch eine Multiple-Expansion (KGV-Ausweitung) voraus.")
 
                     # Modell-Details
                     st.subheader("📐 Modell-Details")
