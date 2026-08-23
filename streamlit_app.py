@@ -15,11 +15,11 @@ with tab1:
     st.subheader("Aktie auswählen")
     
     # Live-Suche / Ticker-Eingabe
-    user_query = st.text_input("Gib Ticker oder Firmennamen ein:", placeholder="z. B. Luf, Toast, Apple...")
+    user_query = st.text_input("Gib Ticker oder Firmennamen ein:", placeholder="z. B. Luf, Toast, Coco, Apple...")
     
     ticker_input = user_query.strip()
     
-    # Erst ab 3 Buchstaben wird die Live-Suche von Yahoo aktiv
+    # Live-Suche ab 3 Buchstaben
     if len(user_query) >= 3:
         try:
             search_results = yf.Search(user_query, max_results=5).quotes
@@ -47,13 +47,16 @@ with tab1:
                 stock = yf.Ticker(ticker_input)
                 info = stock.info
                 
-                # Prüfen ob Kursdaten vorhanden sind
+                # Kurs & Währung
                 current_price = info.get("currentPrice") or info.get("regularMarketPrice")
+                currency = info.get("currency", "USD")
+                currency_symbol = "€" if currency == "EUR" else "$"
                 
                 if current_price is None or np.isnan(current_price):
                     st.error("Keine gültigen Kursdaten für diesen Ticker gefunden.")
                 else:
                     eps = info.get("trailingEps")
+                    forward_eps = info.get("forwardEps")
                     fcf = info.get("freeCashflow")
                     shares = info.get("sharesOutstanding")
                     pe_ratio = info.get("trailingPE")
@@ -62,33 +65,47 @@ with tab1:
                     profit_margins = info.get("profitMargins")
                     ev_ebitda = info.get("enterpriseToEbitda")
                     dividend_yield = info.get("dividendYield", 0) or 0
+                    earnings_growth = info.get("earningsGrowth", 0) or 0
                     
-                    # 1. DCF Modell
+                    # 1. Net Cash per Share Berechnen (Guthaben abzüglich Schulden)
+                    total_cash = info.get("totalCash", 0) or 0
+                    total_debt = info.get("totalDebt", 0) or 0
+                    net_cash_per_share = 0.0
+                    if shares and shares > 0:
+                        net_cash = total_cash - total_debt
+                        if net_cash > 0:
+                            net_cash_per_share = net_cash / shares
+
+                    # 2. Dynamisches Ziel-KGV berechnen (Verbindung aus Wachstum & Standard)
+                    # Basis-KGV = 18, bei Wachstum Zuschlag bis max KGV 35
+                    growth_rate = max(0, earnings_growth * 100)
+                    target_pe = min(35.0, max(15.0, 15.0 + (growth_rate * 0.5)))
+                    
+                    # 3. Modelle Berechnen
                     dcf_val = None
-                    if eps and eps > 0:
-                        dcf_val = eps * 18.9  # Vereinfachtes KGV/DCF Multiplikator-Modell
-                    
-                    # 2. KGV Modell
                     kgv_val = None
-                    if eps and eps > 0:
-                        kgv_val = eps * 20.0
-                        
-                    # 3. FCF Modell
                     fcf_val = None
+                    
+                    # KGV-Modell (bevorzugt Forward-EPS falls vorhanden)
+                    eval_eps = forward_eps if (forward_eps and forward_eps > 0) else eps
+                    if eval_eps and eval_eps > 0:
+                        kgv_val = (eval_eps * target_pe) + net_cash_per_share
+                        dcf_val = (eval_eps * (target_pe * 0.9)) + net_cash_per_share
+                    
+                    # FCF-Modell
                     if fcf and shares and fcf > 0 and shares > 0:
                         fcf_per_share = fcf / shares
-                        fcf_val = fcf_per_share * 15.0
+                        fcf_val = (fcf_per_share * target_pe) + net_cash_per_share
                     
-                    # Fair Values berechnen (Base, Bear, Best)
+                    # Fair Values berechnen
                     valid_models = [v for v in [dcf_val, kgv_val, fcf_val] if v is not None]
                     
                     if valid_models:
                         base_case = sum(valid_models) / len(valid_models)
-                        bear_case = base_case * 0.95
-                        best_case = base_case * 1.05
+                        bear_case = base_case * 0.80  # Breitere Spanne für Realismus
+                        best_case = base_case * 1.20
                         margin_of_safety = ((base_case - current_price) / current_price) * 100
                     else:
-                        # Fallback für unrentable / neue Unternehmen ohne positive Erträge
                         base_case = current_price
                         bear_case = current_price
                         best_case = current_price
@@ -98,37 +115,41 @@ with tab1:
                     st.markdown("---")
                     st.header(f"Ergebnis für {info.get('shortName', ticker_input)}")
                     
-                    col1, col2, col3, col4 = st.columns(4)
-                    col1.metric("Aktueller Kurs", f"{current_price:.2f} $")
-                    col2.metric("Base-Case Fair Value", f"{base_case:.2f} $" if valid_models else "N/A")
+                    col1, col2, col3 = st.columns(3)
+                    col1.metric("Aktueller Kurs", f"{current_price:.2f} {currency_symbol}")
+                    col2.metric("Base-Case Fair Value", f"{base_case:.2f} {currency_symbol}" if valid_models else "N/A")
                     col3.metric("Sicherheitspuffer", f"{margin_of_safety:.1f} %" if valid_models else "0.0 %")
                     
-                    # Urteil
+                    # Urteil mit angepassten Schwellenwerten
                     if not valid_models:
                         urteil = "NEUTRAL / UNRENTABEL"
                         st.info(f"Urteil: **{urteil}** (Keine ausreichenden Gewinne/FCF für Fair-Value-Berechnung)")
                     elif margin_of_safety >= 15:
                         urteil = "KAUFEN"
                         st.success(f"Urteil: 🟢 **{urteil}**")
-                    elif margin_of_safety >= -10:
+                    elif margin_of_safety >= -20:
                         urteil = "HALTEN"
-                        st.warning(f"Urteil: 🟠 **{urteil}**")
+                        st.warning(f"Urteil: 🟡 **{urteil}**")
                     else:
                         urteil = "VERKAUFEN"
                         st.error(f"Urteil: 🔴 **{urteil}**")
 
+                    # Zusatzinfo Net Cash
+                    if net_cash_per_share > 0:
+                        st.caption(f"💡 Enthält einen Net-Cash-Bonus von +{net_cash_per_share:.2f} {currency_symbol} je Aktie.")
+
                     # Szenarien
-                    st.subheader("Szenarien (Base Case)")
+                    st.subheader("Szenarien")
                     sc1, sc2, sc3 = st.columns(3)
-                    sc1.metric("Bear-Case (Konservativ)", f"{bear_case:.2f} $" if valid_models else "N/A")
-                    sc2.metric("Base-Case (Realistisch)", f"{base_case:.2f} $" if valid_models else "N/A")
-                    sc3.metric("Best-Case (Optimistisch)", f"{best_case:.2f} $" if valid_models else "N/A")
+                    sc1.metric("Bear-Case (Konservativ)", f"{bear_case:.2f} {currency_symbol}" if valid_models else "N/A")
+                    sc2.metric("Base-Case (Realistisch)", f"{base_case:.2f} {currency_symbol}" if valid_models else "N/A")
+                    sc3.metric("Best-Case (Optimistisch)", f"{best_case:.2f} {currency_symbol}" if valid_models else "N/A")
 
                     # Einzelne Modelle Detail
                     st.subheader("Modell-Details")
-                    st.write(f"- **DCF-Modell:** {f'{dcf_val:.2f} $' if dcf_val else 'N/A'}")
-                    st.write(f"- **KGV-Modell:** {f'{kgv_val:.2f} $' if kgv_val else 'N/A'}")
-                    st.write(f"- **FCF-Modell:** {f'{fcf_val:.2f} $' if fcf_val else 'N/A'}")
+                    st.write(f"- **DCF/Gewinn-Modell:** {f'{dcf_val:.2f} {currency_symbol}' if dcf_val else 'N/A'}")
+                    st.write(f"- **KGV-Modell (Ziel-KGV {target_pe:.1f}):** {f'{kgv_val:.2f} {currency_symbol}' if kgv_val else 'N/A'}")
+                    st.write(f"- **FCF-Modell:** {f'{fcf_val:.2f} {currency_symbol}' if fcf_val else 'N/A'}")
 
                     # Risikocheck & Qualität
                     st.subheader("📊 Risikocheck & Qualität")
