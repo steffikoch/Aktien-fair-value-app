@@ -29,9 +29,9 @@ def search_ticker(query):
     return clean_query.upper()
 
 # =============================================================
-# HELPER: ENHANCED 4-SCORE BERECHNUNG
+# HELPER: BERECHNUNGS-ENGINE (4-SCORE & METRIKEN)
 # =============================================================
-def analyze_stock_4score(symbol, shares_count, buy_price, total_portfolio_val, max_weight_limit=10.0, tax_free_allowance=1000.0, is_watchlist=False, sim_value=0.0):
+def analyze_stock_full(symbol, shares_count=0.0, buy_price=0.0, total_portfolio_val=65000.0, max_weight_limit=10.0, tax_free_allowance=1000.0):
     try:
         stock = yf.Ticker(symbol)
         info = stock.info
@@ -43,18 +43,10 @@ def analyze_stock_4score(symbol, shares_count, buy_price, total_portfolio_val, m
         curr = info.get('currency', 'EUR')
         curr_sym = "€" if curr == "EUR" else ("$" if curr == "USD" else curr)
         
-        if is_watchlist:
-            current_position_val = sim_value
-            cost_basis = sim_value
-            pnl_eur = 0.0
-            pnl_pct = 0.0
-            shares_count = sim_value / price if price > 0 else 0.0
-            buy_price = price
-        else:
-            cost_basis = shares_count * buy_price
-            current_position_val = shares_count * price
-            pnl_eur = current_position_val - cost_basis
-            pnl_pct = ((price - buy_price) / buy_price * 100) if buy_price > 0 else 0.0
+        cost_basis = shares_count * buy_price
+        current_position_val = shares_count * price
+        pnl_eur = current_position_val - cost_basis
+        pnl_pct = ((price - buy_price) / buy_price * 100) if buy_price > 0 else 0.0
 
         net_margin = (info.get('profitMargins') or 0.0) * 100
         roe = (info.get('returnOnEquity') or 0.0) * 100
@@ -113,7 +105,7 @@ def analyze_stock_4score(symbol, shares_count, buy_price, total_portfolio_val, m
 
         ret_5y_no_drip = net_cap_gain_5y + net_div_yield
 
-        # 4. Depot-Allokation & Kapazität
+        # 4. Depot-Allokation
         weight_pct = (current_position_val / total_portfolio_val * 100) if total_portfolio_val > 0 else 0.0
         max_allowed_val = (max_weight_limit / 100.0) * total_portfolio_val
         remaining_cap_eur = max(0.0, max_allowed_val - current_position_val)
@@ -127,27 +119,29 @@ def analyze_stock_4score(symbol, shares_count, buy_price, total_portfolio_val, m
         else:
             action = f"🟢 KAUF MÖGLICH ({weight_pct:.1f}%)"
 
-        pnl_str = "Watchlist" if is_watchlist else f"{'+' if pnl_eur >= 0 else ''}{pnl_eur:,.2f} € ({'+' if pnl_pct >= 0 else ''}{pnl_pct:.2f}%)"
+        pnl_str = f"{'+' if pnl_eur >= 0 else ''}{pnl_eur:,.2f} € ({'+' if pnl_pct >= 0 else ''}{pnl_pct:.2f}%)"
 
         return {
             "Ticker": symbol,
             "Name": info.get('shortName', symbol),
-            "Stückzahl": f"{shares_count:,.2f}" if not is_watchlist else "0.00 (Watch)",
-            "Kaufkurs": f"{buy_price:.2f} {curr_sym}" if not is_watchlist else "-",
+            "Stückzahl": f"{shares_count:,.2f}",
+            "Kaufkurs": f"{buy_price:.2f} {curr_sym}",
             "Akt. Kurs": f"{price:.2f} {curr_sym}",
-            "Einstand (€)": f"{cost_basis:,.2f} €" if not is_watchlist else "-",
-            "Akt. Wert (€)": f"{current_position_val:,.2f} €" if not is_watchlist else f"Sim: {sim_value:,.2f} €",
+            "raw_price": price,
+            "Einstand (€)": f"{cost_basis:,.2f} €",
+            "Akt. Wert (€)": f"{current_position_val:,.2f} €",
             "G&V Total": pnl_str,
             "Fair Value": f"{fair_value:.2f} {curr_sym}",
             "Puffer": f"{mos:+.1f} %",
             "Quality": f"{quality_score}/100",
+            "raw_quality": quality_score,
             "Opt. Rendite": f"{ret_5y_no_drip:.2f} %",
             "Gewicht": f"{weight_pct:.1f} %",
             "Freie Kap. (€)": f"{remaining_cap_eur:,.2f} €",
             "Status": action,
-            "raw_cost_basis": cost_basis if not is_watchlist else 0.0,
-            "raw_current_val": current_position_val if not is_watchlist else 0.0,
-            "raw_pnl": pnl_eur if not is_watchlist else 0.0
+            "raw_cost_basis": cost_basis,
+            "raw_current_val": current_position_val,
+            "raw_pnl": pnl_eur
         }
     except Exception:
         return None
@@ -170,142 +164,196 @@ tax_allowance_input = st.sidebar.number_input("Sparer-Pauschbetrag (€):", min_
 
 # Session State Initialisierung
 if "portfolio" not in st.session_state:
-    st.session_state.portfolio = [{"ticker": "MUV2.DE", "shares": 14.0, "buy_price": 543.30}]
-if "watchlist" not in st.session_state:
-    st.session_state.watchlist = [{"ticker": "DTE.DE", "sim_val": 2000.0}]
+    st.session_state.portfolio = [
+        {"ticker": "MUV2.DE", "shares": 14.0, "buy_price": 543.30}
+    ]
 
-# TAB-NAVIGATION FÜR HAUPTBEREICH
-tab1, tab2 = st.tabs(["📋 Reales Depot (G&V & Allokation)", "🔍 Watchlist & Einzelwert-Analyse"])
+# TAB-NAVIGATION: DREI MODI
+tab_a, tab_b, tab_c = st.tabs([
+    "🟢 A. Einzelaktie (Quick-Check)", 
+    "🔵 B. Reales Depot (G&V & Allokation)", 
+    "🟠 C. Kaufsimulation (Fit-Test)"
+])
 
-with st.sidebar:
-    st.markdown("---")
-    st.subheader("➕ Aktie hinzufügen")
-    target_list = st.radio("Ziel-Bereich:", ["Reales Depot", "Watchlist"])
-    input_search = st.text_input("Name oder Ticker (z. B. Allianz, AAPL):", value="").strip()
+# =============================================================
+# TAB A: EINZELAKTIE (QUICK-CHECK)
+# =============================================================
+with tab_a:
+    st.subheader("🟢 A. Einzelaktien-Analyse")
+    st.caption("Ist die Aktie gut und günstig? (Unabhängig von deinen Depot-Beständen)")
     
-    if target_list == "Reales Depot":
-        new_shares = st.number_input("Stückzahl:", min_value=0.0, value=0.0, step=1.0)
-        new_buy_price = st.number_input("Kaufkurs pro Aktie (€):", min_value=0.0, value=0.0, step=1.0)
-    else:
-        sim_kauf_val = st.number_input("Simulierter Kaufwert (€):", min_value=0.0, value=2000.0, step=500.0)
-
-    if st.button("Speichern / Hinzufügen"):
-        if input_search:
-            with st.status("Suche Ticker-Symbol..."):
-                resolved_ticker = search_ticker(input_search)
+    query_a = st.text_input("Aktie oder Ticker eingeben (z. B. COCO, Münchener Rück, AAPL):", key="search_a").strip()
+    
+    if query_a:
+        with st.spinner("Analysiere Daten..."):
+            resolved_a = search_ticker(query_a)
+            res_a = analyze_stock_full(resolved_a, shares_count=0, buy_price=0, total_portfolio_val=depot_val_input, tax_free_allowance=tax_allowance_input)
             
-            if resolved_ticker:
-                if target_list == "Reales Depot" and new_shares > 0 and new_buy_price > 0:
-                    found = False
-                    for item in st.session_state.portfolio:
-                        if item["ticker"] == resolved_ticker:
-                            item["shares"] = new_shares
-                            item["buy_price"] = new_buy_price
-                            found = True
-                            break
-                    if not found:
-                        st.session_state.portfolio.append({"ticker": resolved_ticker, "shares": new_shares, "buy_price": new_buy_price})
-                    st.success(f"{resolved_ticker} im Depot gespeichert!")
-                    st.rerun()
-                elif target_list == "Watchlist":
-                    found = False
-                    for item in st.session_state.watchlist:
-                        if item["ticker"] == resolved_ticker:
-                            item["sim_val"] = sim_kauf_val
-                            found = True
-                            break
-                    if not found:
-                        st.session_state.watchlist.append({"ticker": resolved_ticker, "sim_val": sim_kauf_val})
-                    st.success(f"{resolved_ticker} auf der Watchlist gespeichert!")
-                    st.rerun()
-
-    # Löschfunktionen
-    st.markdown("---")
-    st.subheader("🗑️ Entfernen")
-    del_target = st.radio("Auswahl löschen aus:", ["Reales Depot", "Watchlist"], key="del_target")
-    if del_target == "Reales Depot" and st.session_state.portfolio:
-        t_list = [item["ticker"] for item in st.session_state.portfolio]
-        t_rem = st.selectbox("Aktie wählen:", options=t_list, key="del_depot")
-        if st.button("Aus Depot löschen"):
-            st.session_state.portfolio = [item for item in st.session_state.portfolio if item["ticker"] != t_rem]
-            st.rerun()
-    elif del_target == "Watchlist" and st.session_state.watchlist:
-        w_list = [item["ticker"] for item in st.session_state.watchlist]
-        w_rem = st.selectbox("Aktie wählen:", options=w_list, key="del_watch")
-        if st.button("Von Watchlist löschen"):
-            st.session_state.watchlist = [item for item in st.session_state.watchlist if item["ticker"] != w_rem]
-            st.rerun()
+            if res_a:
+                st.markdown(f"### {res_a['Name']} (`{res_a['Ticker']}`)")
+                col1, col2, col3, col4 = st.columns(4)
+                col1.metric("Aktueller Kurs", res_a["Akt. Kurs"])
+                col2.metric("Fairer Wert", res_a["Fair Value"], delta=res_a["Puffer"])
+                col3.metric("Quality Score", res_a["Quality"])
+                col4.metric("Opt. Netto-Rendite (p.a.)", res_a["Opt. Rendite"])
+                
+                st.divider()
+                st.success(f"**Fazit:** Fairer Wert liegt bei **{res_a['Fair Value']}** (Sicherheitsmarge: **{res_a['Puffer']}**). Quality Score: **{res_a['Quality']}**.")
+            else:
+                st.error("Aktie konnte nicht gefunden oder analysiert werden.")
 
 # =============================================================
-# TAB 1: REALES DEPOT
+# TAB B: REALES DEPOT
 # =============================================================
-with tab1:
-    st.subheader("📋 Einzelaktien-Matrix, G&V & Kapazitäten")
-    results = []
+with tab_b:
+    st.subheader("🔵 B. Reales Depot & Bestandsübersicht")
+    
+    # Sidebar Erweiterung für Depot-Verwaltung
+    with st.sidebar:
+        st.markdown("---")
+        st.subheader("➕ Aktie im Depot verwalten")
+        input_b = st.text_input("Name/Ticker für Depot:", key="input_b").strip()
+        shares_b = st.number_input("Stückzahl:", min_value=0.0, value=0.0, step=1.0)
+        buy_price_b = st.number_input("Kaufkurs (€):", min_value=0.0, value=0.0, step=1.0)
+        
+        if st.button("Ins Depot speichern"):
+            if input_b and shares_b > 0 and buy_price_b > 0:
+                t_res = search_ticker(input_b)
+                found = False
+                for item in st.session_state.portfolio:
+                    if item["ticker"] == t_res:
+                        item["shares"] = shares_b
+                        item["buy_price"] = buy_price_b
+                        found = True
+                        break
+                if not found:
+                    st.session_state.portfolio.append({"ticker": t_res, "shares": shares_b, "buy_price": buy_price_b})
+                st.success(f"{t_res} aktualisiert!")
+                st.rerun()
+
+        if st.session_state.portfolio:
+            st.markdown("---")
+            t_rem = st.selectbox("Aktie löschen:", [x["ticker"] for x in st.session_state.portfolio])
+            if st.button("Löschen"):
+                st.session_state.portfolio = [x for x in st.session_state.portfolio if x["ticker"] != t_rem]
+                st.rerun()
+
+    results_b = []
     for item in st.session_state.portfolio:
-        res = analyze_stock_4score(item["ticker"], item["shares"], item["buy_price"], depot_val_input, limit_pct_input, tax_allowance_input)
+        res = analyze_stock_full(item["ticker"], item["shares"], item["buy_price"], depot_val_input, limit_pct_input, tax_allowance_input)
         if res:
-            results.append(res)
+            results_b.append(res)
 
-    if results:
-        df_raw = pd.DataFrame(results)
+    if results_b:
+        df_b = pd.DataFrame(results_b)
         display_cols = [
             "Ticker", "Name", "Stückzahl", "Kaufkurs", "Akt. Kurs", 
             "Einstand (€)", "Akt. Wert (€)", "G&V Total", 
-            "Fair Value", "Puffer", "Quality", "Opt. Rendite", 
+            "Fair Value", "Quality", "Opt. Rendite", 
             "Gewicht", "Freie Kap. (€)", "Status"
         ]
-        st.dataframe(df_raw[display_cols], use_container_width=True)
+        st.dataframe(df_b[display_cols], use_container_width=True)
         
-        total_cost = df_raw["raw_cost_basis"].sum()
-        total_current_val = df_raw["raw_current_val"].sum()
-        total_pnl_eur = df_raw["raw_pnl"].sum()
+        total_cost = df_b["raw_cost_basis"].sum()
+        total_current_val = df_b["raw_current_val"].sum()
+        total_pnl_eur = df_b["raw_pnl"].sum()
         total_pnl_pct = ((total_current_val - total_cost) / total_cost * 100) if total_cost > 0 else 0.0
         
-        cash_left = max(0.0, depot_val_input - total_current_val)
         allocated_pct = (total_current_val / depot_val_input) * 100
+        cash_left = max(0.0, depot_val_input - total_current_val)
         
-        if allocated_pct < target_stock_quote_min:
-            quote_status = f"🟢 {allocated_pct:.1f}% (Unterhalb Zielbereich {target_stock_quote_min}-{target_stock_quote_max}%)"
-        elif allocated_pct <= target_stock_quote_max:
-            quote_status = f"🟢 {allocated_pct:.1f}% (Im Zielbereich {target_stock_quote_min}-{target_stock_quote_max}%)"
-        else:
-            quote_status = f"🔴 {allocated_pct:.1f}% (Oberhalb Zielbereich {target_stock_quote_min}-{target_stock_quote_max}%)"
+        # Euro-Berechnungen für Zielkorridor
+        min_target_eur = (target_stock_quote_min / 100.0) * depot_val_input
+        max_target_eur = (target_stock_quote_max / 100.0) * depot_val_input
+        
+        dist_to_min = max(0.0, min_target_eur - total_current_val)
+        dist_to_max = max(0.0, max_target_eur - total_current_val)
 
         st.markdown("---")
         st.markdown("### 📊 Depot-Gesamtübersicht & Performance")
+        
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Gesamteinstand Aktien", f"{total_cost:,.2f} €")
         c2.metric("Aktueller Wert Aktien", f"{total_current_val:,.2f} €", f"{allocated_pct:.1f} % Quote")
         c3.metric("Gesamt G&V Aktien", f"{total_pnl_eur:,.2f} €", f"{total_pnl_pct:+.2f} %")
         c4.metric("ETF / Cash / Ungebunden", f"{cash_left:,.2f} €", f"{100 - allocated_pct:.1f} % Freiraum")
         
-        st.info(f"**Aktienquote Status:** {quote_status}")
+        st.divider()
+        st.markdown(f"#### 🎯 Aktienquoten-Steuerung ({target_stock_quote_min} % – {target_stock_quote_max} % Korridor)")
+        
+        q_col1, q_col2, q_col3 = st.columns(3)
+        q_col1.metric("Bis Untergrenze (10 %)", f"{dist_to_min:,.2f} €", delta="Erreicht" if dist_to_min == 0 else f"Noch {dist_to_min:,.2f} €")
+        q_col2.metric("Verbleibender Spielraum bis 20 %", f"{dist_to_max:,.2f} €", delta=f"{dist_to_max:,.2f} € verfügbar", delta_color="normal")
+        
+        if allocated_pct < target_stock_quote_min:
+            q_col3.error(f"Quote zu niedrig: {allocated_pct:.1f}%")
+        elif allocated_pct <= target_stock_quote_max:
+            q_col3.success(f"🟢 Quote optimal: {allocated_pct:.1f}%")
+        else:
+            q_col3.warning(f"🔴 Quote überschritten: {allocated_pct:.1f}%")
+
     else:
-        st.info("Keine Aktien im realen Portfolio.")
+        st.info("Keine Aktien im Portfolio.")
 
 # =============================================================
-# TAB 2: WATCHLIST & SIMULATOR
+# TAB C: KAUFSIMULATION
 # =============================================================
-with tab2:
-    st.subheader("🔍 Watchlist & Kauf-Simulation")
-    st.caption("Prüfe neue Aktien auf Fundamentalwerte, ohne deine reale Performance zu verändern.")
+with tab_c:
+    st.subheader("🟠 C. Kaufsimulation & Portfolio Fit")
+    st.caption("Was passiert mit deinen Quoten, wenn du eine bestimmte Summe investierst?")
     
-    watch_results = []
-    for item in st.session_state.watchlist:
-        res = analyze_stock_4score(
-            item["ticker"], 0, 0, depot_val_input, limit_pct_input, tax_allowance_input, 
-            is_watchlist=True, sim_value=item["sim_val"]
-        )
-        if res:
-            watch_results.append(res)
+    sim_col1, sim_col2 = st.columns(2)
+    with sim_col1:
+        sim_query = st.text_input("Simulierte Aktie (Name oder Ticker):", value="COCO", key="sim_q").strip()
+    with sim_col2:
+        sim_amount = st.number_input("Simulierter Kaufwert (€):", min_value=100.0, value=1000.0, step=250.0)
+        
+    if sim_query and sim_amount > 0:
+        sim_ticker = search_ticker(sim_query)
+        sim_data = analyze_stock_full(sim_ticker, shares_count=0, buy_price=0, total_portfolio_val=depot_val_input, tax_free_allowance=tax_allowance_input)
+        
+        if sim_data:
+            # Berechnungen Vorher / Nachher
+            current_stock_val = sum([x["raw_current_val"] for x in results_b]) if 'results_b' in locals() and results_b else 0.0
             
-    if watch_results:
-        df_watch = pd.DataFrame(watch_results)
-        watch_cols = [
-            "Ticker", "Name", "Akt. Kurs", "Akt. Wert (€)", "Fair Value", 
-            "Puffer", "Quality", "Opt. Rendite", "Gewicht", "Freie Kap. (€)", "Status"
-        ]
-        st.dataframe(df_watch[watch_cols], use_container_width=True)
-    else:
-        st.info("Keine Aktien auf der Watchlist.")
+            quote_before = (current_stock_val / depot_val_input) * 100
+            new_stock_val = current_stock_val + sim_amount
+            quote_after = (new_stock_val / depot_val_input) * 100
+            
+            position_weight = (sim_amount / depot_val_input) * 100
+            
+            max_target_eur = (target_stock_quote_max / 100.0) * depot_val_input
+            spielraum_after = max(0.0, max_target_eur - new_stock_val)
+            
+            st.divider()
+            st.markdown(f"### Simulation: Kauf von **{sim_amount:,.2f} €** in `{sim_data['Ticker']}` ({sim_data['Name']})")
+            
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Aktienquote vorher", f"{quote_before:.1f} %")
+            m2.metric("Aktienquote nach Kauf", f"{quote_after:.1f} %", delta=f"+{quote_after - quote_before:.1f} %")
+            m3.metric("Positionsgewicht", f"{position_weight:.1f} %", delta="OK" if position_weight <= limit_pct_input else "Über Limit!", delta_color="normal" if position_weight <= limit_pct_input else "inverse")
+            m4.metric("Verbleibender Spielraum (20 %)", f"{spielraum_after:,.2f} €")
+            
+            # Portfolio-Fit Bewertung
+            st.markdown("#### 🎯 Portfolio Fit Bewertung")
+            
+            fit_checks = []
+            if position_weight <= limit_pct_input:
+                fit_checks.append("✅ Positionsgröße liegt unter dem 10 % Einzelwert-Limit.")
+            else:
+                fit_checks.append("❌ Position würde das 10 % Einzelwert-Limit überschreiten!")
+                
+            if quote_after <= target_stock_quote_max:
+                fit_checks.append("✅ Die Gesamte Aktienquote bleibt innerhalb des 20 % Zielkorridors.")
+            else:
+                fit_checks.append("❌ Die Gesamte Aktienquote würde den 20 % Zielkorridor überschreiten!")
+                
+            if sim_data["raw_quality"] >= 60:
+                fit_checks.append(f"✅ Hohe Qualität (Quality Score: {sim_data['Quality']}).")
+            else:
+                fit_checks.append(f"⚠️ Mäßige Qualität (Quality Score: {sim_data['Quality']}).")
+
+            for check in fit_checks:
+                st.write(check)
+        else:
+            st.error("Simulations-Aktie konnte nicht geladen werden.")
