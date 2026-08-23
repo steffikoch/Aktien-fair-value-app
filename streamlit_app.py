@@ -22,6 +22,9 @@ tab_a, tab_b, tab_c = st.tabs(
 with tab_a:
     st.subheader("Aktien- & Risiko-Analyse")
 
+    # Wieder eingefügtes Eingabefeld für den Aktiennamen
+    aktien_name = st.text_input("Aktienname:", value="Allianz", key="ana_name")
+
     current_price = st.number_input(
         "Aktueller Kurs (€):", value=100.0, step=1.0, key="ana_price"
     )
@@ -30,7 +33,7 @@ with tab_a:
 
     st.markdown("---")
     st.metric(
-        label="Berechneter Stop-Loss Kurs", value=f"{calculated_stop:.2f} €"
+        label=f"Berechneter Stop-Loss Kurs ({aktien_name})", value=f"{calculated_stop:.2f} €"
     )
 
     st.markdown("---")
