@@ -2,127 +2,156 @@ import pandas as pd
 import streamlit as st
 
 st.set_page_config(
-    page_title="Stock Manager",
-    layout="centered",
-    initial_sidebar_state="collapsed",
+    page_title="Depot-Integration & Kaufgrößen-Prüfung", layout="wide"
 )
 
-# Die exakten 3 Reiter oben nebeneinander
-tab1, tab2, tab3 = st.tabs(
-    ["📊 Depot & Klumpenrisiko", "🧮 DCF & Bewertung", "⚙️ Trailing-Stop & Regeln"]
+# ---------------------------------------------------------
+# 1. SIMULIERTE PORTFOLIO-DATENBANK (Bestehendes Depot)
+# ---------------------------------------------------------
+# Hier sind bereits AXA und Münchener Rück im Sektor "Finanzen" hinterlegt
+if "portfolio_data" not in st.session_state:
+    st.session_state.portfolio_data = pd.DataFrame(
+        [
+            {
+                "Ticker": "CS.PA",
+                "Name": "AXA SA",
+                "Sektor": "Finanzen",
+                "Wert": 1000.00,
+            },
+            {
+                "Ticker": "MUV2.DE",
+                "Name": "Münchener Rück",
+                "Sektor": "Finanzen",
+                "Wert": 2000.00,
+            },
+            {
+                "Ticker": "AAPL",
+                "Name": "Apple Inc.",
+                "Sektor": "Technologie",
+                "Wert": 4000.00,
+            },
+            {
+                "Ticker": "MSFT",
+                "Name": "Microsoft Corp.",
+                "Sektor": "Technologie",
+                "Wert": 3000.00,
+            },
+        ]
+    )
+
+# Sektor-Mapping für neue Test-Eingaben
+SEKTOR_MAPPING = {
+    "ALV.DE": ("Allianz SE", "Finanzen"),
+    "ALLIANZ": ("Allianz SE", "Finanzen"),
+    "CS.PA": ("AXA SA", "Finanzen"),
+    "AXA": ("AXA SA", "Finanzen"),
+    "MUV2.DE": ("Münchener Rück", "Finanzen"),
+    "DTE.DE": ("Deutsche Telekom", "Telekommunikation"),
+    "ZSCALER": ("Zscaler", "Technologie"),
+}
+
+# Config / Limits
+MAX_POSITION_WEIGHT = 5.0  # Max. 5% pro Einzelaktie
+MAX_SEKTOR_WEIGHT = 20.0  # Max. 20% pro Sektor
+TARGET_AKTIENQUOTE = 50.0  # Ziel-Aktienquote
+
+# ---------------------------------------------------------
+# 2. BENUTZEROBERFLÄCHE (EINGABE)
+# ---------------------------------------------------------
+st.title("Depot-Integration & Kaufgrößen-Prüfung")
+
+col_input, col_sum = st.columns(2)
+
+with col_input:
+    # Flexibles Eingabefeld statt starrer Selectbox
+    sim_ticker_input = st.text_input(
+        "Zu simulierende Aktie (Ticker oder Name):", value="ALV.DE"
+    ).upper()
+
+with col_sum:
+    buy_amount = st.number_input(
+        "Geplante Kaufsumme (€):", value=1000.0, step=100.0, min_value=0.0
+    )
+
+# Ticker & Sektor-Zuordnung ermitteln
+stock_name, stock_sektor = SEKTOR_MAPPING.get(
+    sim_ticker_input, (sim_ticker_input, "Finanzen")
 )
 
-# =========================================================
-# TAB 1: DEPOT & KLUMPENRISIKO
-# =========================================================
-with tab1:
-    st.subheader("Aktueller Depot-Status & Verwaltung")
-    st.markdown("Trage deine Aktien ein. Werte werden sofort verrechnet!")
+st.markdown("---")
 
-    if "depot_df" not in st.session_state:
-        st.session_state.depot_df = pd.DataFrame(
-            [
-                {
-                    "Name": "AXA SA",
-                    "Sektor": "Finanzen",
-                    "Stückzahl": 188,
-                    "Kurs (€)": 43.73,
-                }
-            ]
-        )
+# ---------------------------------------------------------
+# 3. KELKULATION & KLUMPENRISIKO-PRÜFUNG
+# ---------------------------------------------------------
+df_current = st.session_state.portfolio_data.copy()
 
-    col_btn1, col_btn2 = st.columns(2)
-    with col_btn1:
-        if st.button("🗑️ Depot leeren", use_container_width=True):
-            st.session_state.depot_df = pd.DataFrame(
-                columns=["Name", "Sektor", "Stückzahl", "Kurs (€)"]
-            )
-            st.rerun()
-    with col_btn2:
-        if st.button("🔄 Standard laden", use_container_width=True):
-            st.session_state.depot_df = pd.DataFrame(
-                [
-                    {
-                        "Name": "AXA SA",
-                        "Sektor": "Finanzen",
-                        "Stückzahl": 188,
-                        "Kurs (€)": 43.73,
-                    }
-                ]
-            )
-            st.rerun()
+# 1. Bisheriges Depotberechnungen
+bisheriges_depot_gesamtwert = df_current["Wert"].sum()
+neues_depot_gesamtwert = bisheriges_depot_gesamtwert + buy_amount
 
-    edited_df = st.data_editor(
-        st.session_state.depot_df, num_rows="dynamic", key="depot_editor"
-    )
-    st.session_state.depot_df = edited_df
+# 2. Positionsgewicht der neuen Aktie berechnen
+# (Falls Aktie bereits im Depot ist, Wert addieren)
+bisheriger_aktien_wert = df_current[
+    df_current["Ticker"] == sim_ticker_input
+]["Wert"].sum()
+neuer_aktien_wert = bisheriger_aktien_wert + buy_amount
+neues_positionsgewicht = (neuer_aktien_wert / neues_depot_gesamtwert) * 100
 
-    try:
-        edited_df["Gesamtwert"] = (
-            edited_df["Stückzahl"].astype(float)
-            * edited_df["Kurs (€)"].astype(float)
-        )
-        aktienwert = edited_df["Gesamtwert"].sum()
-    except Exception:
-        aktienwert = 0.0
+# 3. Sektoranteil berechnen (Inkl. AXA + Münchener Rück + Allianz)
+bisheriger_sektor_wert = df_current[df_current["Sektor"] == stock_sektor][
+    "Wert"
+].sum()
+neuer_sektor_wert = bisheriger_sektor_wert + buy_amount
+neuer_sektor_anteil = (neuer_sektor_wert / neues_depot_gesamtwert) * 100
 
-    cash_reserve = st.number_input(
-        "Verfügbares Cash / Puffer (€):",
-        value=25000.0,
-        step=1000.0,
-        key="depot_cash",
-    )
-    gesamtdepotwert = aktienwert + cash_reserve
-    aktienquote = (aktienwert / gesamtdepotwert * 100) if gesamtdepotwert > 0 else 0
+# ---------------------------------------------------------
+# 4. ERGEBNIS-ANZEIGE & ALARME
+# ---------------------------------------------------------
+st.subheader(
+    f"Simulation: Kauf von {buy_amount:,.2f} € in {sim_ticker_input} ({stock_name})"
+)
 
-    st.markdown("---")
-    st.metric(label="Gesamtdepotwert", value=f"{gesamtdepotwert:,.2f} €")
-    st.metric(label="Aktienwert", value=f"{aktienwert:,.2f} €")
-    st.metric(label="Aktienquote", value=f"{aktienquote:.1f} %")
+m_col1, m_col2, m_col3 = st.columns(3)
 
-
-# =========================================================
-# TAB 2: DCF & BEWERTUNG
-# =========================================================
-with tab2:
-    st.subheader("🧮 DCF & Bewertung")
-
-    fcf = st.number_input(
-        "Free Cash Flow (Mio. €):", value=500.0, step=50.0, key="dcf_fcf"
-    )
-    growth_rate = st.slider(
-        "Wachstum p.a. (%):", 0.0, 30.0, 8.0, key="dcf_growth"
-    )
-    discount_rate = st.slider(
-        "WACC / Abzinsung (%):", 5.0, 15.0, 9.0, key="dcf_wacc"
-    )
-
-    fair_value_demo = fcf * (1 + growth_rate / 100) / (discount_rate / 100)
-
-    st.markdown("---")
+# Metric 1: Aktienquote
+with m_col1:
     st.metric(
-        label="Fairer Wert (Indikation Mio. €)",
-        value=f"{fair_value_demo:,.2f} €",
+        label="Aktienquote",
+        value=f"{TARGET_AKTIENQUOTE}% → {TARGET_AKTIENQUOTE}%",
     )
+    st.caption(f"↑ Ziel-Max: {TARGET_AKTIENQUOTE}%")
 
+# Metric 2: Positionsgewicht
+with m_col2:
+    st.metric(label="Positionsgewicht", value=f"{neues_positionsgewicht:.1f} %")
+    if neues_positionsgewicht > MAX_POSITION_WEIGHT:
+        st.error(f"⚠️ Exzessiv: Max. {MAX_POSITION_WEIGHT}% erlaubt!")
+    else:
+        st.caption(f"↑ Max: {MAX_POSITION_WEIGHT}%")
 
-# =========================================================
-# TAB 3: TRAILING-STOP & REGELN
-# =========================================================
-with tab3:
-    st.subheader("⚙️ Trailing-Stop & Risikomanagement")
-
-    current_price = st.number_input(
-        "Aktueller Kurs (€):", value=100.0, step=1.0, key="ts_price"
-    )
-    stop_pct = st.slider(
-        "Stop-Abstand (%):", 1.0, 20.0, 8.0, key="ts_pct"
-    )
-
-    calculated_stop = current_price * (1 - stop_pct / 100)
-
-    st.markdown("---")
+# Metric 3: Sektoranteil (Das eigentliche Klumpenrisiko)
+with m_col3:
     st.metric(
-        label="Berechneter Stop-Loss Kurs", value=f"{calculated_stop:.2f} €"
+        label=f"Sektoranteil ({stock_sektor})",
+        value=f"{neuer_sektor_anteil:.1f} %",
     )
-    st.caption(f"Maximaler Verlust bei Auslösung: -{stop_pct:.1f}%")
+    if neuer_sektor_anteil > MAX_SEKTOR_WEIGHT:
+        st.error(f"🚨 KLUMPENRISIKO! Sektor-Limit ({MAX_SEKTOR_WEIGHT}%) überschritten!")
+    else:
+        st.caption(f"↑ Max Sektor-Limit: {MAX_SEKTOR_WEIGHT}%")
+
+# Explicit Warning Box bei Überschreitung
+st.markdown("---")
+if neuer_sektor_anteil > MAX_SEKTOR_WEIGHT:
+    st.error(
+        f"**Warnung vor Sektorkonzentration:** Durch den Kauf von **{stock_name}** steigt der Anteil des Sektors "
+        f"**'{stock_sektor}'** im Gesamtdepot auf **{neuer_sektor_anteil:.1f}%** (Bestehend: AXA + Münch. Rück). "
+        f"Das festgelegte Maximallimit liegt bei **{MAX_SEKTOR_WEIGHT}%**."
+    )
+elif neues_positionsgewicht > MAX_POSITION_WEIGHT:
+    st.warning(
+        f"**Einzelwert-Warnung:** Das Positionsgewicht von **{sim_ticker_input}** überschreitet mit "
+        f"**{neues_positionsgewicht:.1f}%** das erlaubte Einzellimit von **{MAX_POSITION_WEIGHT}%**."
+    )
+else:
+    st.success("✅ Der Kauf liegt innerhalb aller festgelegten Risikogrenzen.")
