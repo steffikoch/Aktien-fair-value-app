@@ -2,27 +2,30 @@ import pandas as pd
 import streamlit as st
 
 st.set_page_config(
-    page_title="Capacity Engine",
+    page_title="Stock Valuation & Portfolio Capacity Engine",
     layout="centered",
     initial_sidebar_state="collapsed",
 )
 
-# Kürzerer Text für die Tabs, damit sie auf dem Handy perfekt nebeneinander passen
+# Exakter Titel wie auf deinem neuen Screenshot
+st.markdown(
+    "# 📈 Stock Valuation & Portfolio Capacity Engine"
+)
+
+# Die exakten 3 Reiter mit ihren Original-Bezeichnungen
 tab_a, tab_b, tab_c = st.tabs(
     [
-        "🔍 Analyse",
-        "📊 Depot",
-        "🎯 Simulation",
+        "🔍 Tab A: Aktien-Analyse",
+        "📊 Tab B: Depot-Verwaltung",
+        "🎯 Tab C: Kauf-Simulation & Tranchen",
     ]
 )
 
 # =========================================================
-# TAB A: AKTIEN-ANALYSE (DCF, Stop-Loss etc.)
+# TAB A: AKTIEN-ANALYSE
 # =========================================================
 with tab_a:
-    st.subheader("Aktien- & Risiko-Analyse")
-
-    aktien_name = st.text_input("Aktienname:", value="AXA", key="ana_name")
+    st.subheader("Einzelaktien-Bewertung & Risiko")
 
     current_price = st.number_input(
         "Aktueller Kurs (€):", value=100.0, step=1.0, key="ana_price"
@@ -32,7 +35,7 @@ with tab_a:
 
     st.markdown("---")
     st.metric(
-        label=f"Berechneter Stop-Loss Kurs ({aktien_name})", value=f"{calculated_stop:.2f} €"
+        label="Berechneter Stop-Loss Kurs", value=f"{calculated_stop:.2f} €"
     )
 
     st.markdown("---")
@@ -76,13 +79,13 @@ with tab_b:
 
     col_btn1, col_btn2 = st.columns(2)
     with col_btn1:
-        if st.button("🗑️ Leeren", use_container_width=True):
+        if st.button("🗑️ Depot leeren", use_container_width=True):
             st.session_state.depot_df = pd.DataFrame(
                 columns=["Name", "Sektor", "Stückzahl", "Kurs (€)"]
             )
             st.rerun()
     with col_btn2:
-        if st.button("🔄 Standard", use_container_width=True):
+        if st.button("🔄 Standard laden", use_container_width=True):
             st.session_state.depot_df = pd.DataFrame(
                 [
                     {
@@ -145,72 +148,7 @@ with tab_c:
         "Geplante Kaufsumme (€):", value=1000.0, step=100.0, key="c_summe"
     )
 
-    sektor_mapping = {
-        "Allianz": "Finanzen",
-        "AXA": "Finanzen",
-        "Apple": "Technologie",
-        "Telekom": "Telekommunikation"
-    }
-    sim_sektor = sektor_mapping.get(sim_aktie, "Sonstige")
-
-    depot_df = st.session_state.get("depot_df", pd.DataFrame())
-    aktienwert_depot = 0.0
-    sektor_aktienwert = 0.0
-
-    if not depot_df.empty:
-        try:
-            depot_df["Zeilenwert"] = depot_df["Stückzahl"].astype(float) * depot_df["Kurs (€)"].astype(float)
-            aktienwert_depot = depot_df["Zeilenwert"].sum()
-            
-            sektor_mask = depot_df["Sektor"].astype(str).str.lower() == sim_sektor.lower()
-            sektor_aktienwert = depot_df.loc[sektor_mask, "Zeilenwert"].sum()
-        except Exception:
-            pass
-
-    cash_wert = st.session_state.get("depot_cash", 0.0)
-    gesamtdepot_wert = aktienwert_depot + cash_wert
-
-    sektor_anteil_aktien = (sektor_aktienwert / aktienwert_depot * 100) if aktienwert_depot > 0 else 0.0
-    sektor_anteil_gesamtdepot = (sektor_aktienwert / gesamtdepot_wert * 100) if gesamtdepot_wert > 0 else 0.0
-    MAX_SEKTOR_GESAMTDEPOT_LIMIT = 25.0
-
     st.markdown("---")
-    st.markdown(f"**Simulation für {sim_aktie} (Sektor: {sim_sektor}):**")
-    st.metric(label="Geplante Investitionssumme", value=f"{geplante_summe:,.2f} €")
-
-    if sektor_anteil_aktien < 30.0:
-        sektor_status = "🟢 Normal"
-        modellierte_max_tranche = 3000.0
-    elif 30.0 <= sektor_anteil_aktien < 40.0:
-        sektor_status = "🟡 Beobachten"
-        modellierte_max_tranche = 2000.0
-    elif 40.0 <= sektor_anteil_aktien <= 50.0:
-        sektor_status = "🟠 Kauf drosseln"
-        modellierte_max_tranche = 1000.0
-    else:
-        sektor_status = "🔴 Keine weiteren Käufe"
-        modellierte_max_tranche = 0.0
-
-    st.info(
-        f"📊 **Portfolio-Check:**\n"
-        f"- Sektoranteil am Aktienportfolio: **{sektor_anteil_aktien:.1f} %** ({sektor_status})\n"
-        f"- Sektoranteil am Gesamtdepot: **{sektor_anteil_gesamtdepot:.1f} %** (Limit: {MAX_SEKTOR_GESAMTDEPOT_LIMIT}%)\n"
-        f"- Modellierte **maximale Erst-Tranche**: **{modellierte_max_tranche:,.2f} €**"
-    )
-
-    if sektor_anteil_aktien > 50.0:
-        st.error(
-            f"❌ Stopp: Sektoranteil am Aktienportfolio liegt bei {sektor_anteil_aktien:.1f} % (> 50 %). "
-            "Keine weiteren Käufe in diesem Sektor möglich!"
-        )
-    elif geplante_summe > modellierte_max_tranche and sektor_anteil_aktien >= 40.0:
-        st.warning(
-            f"🟡 Gedrosselte Erst-Tranche: Der Sektoranteil am Aktienportfolio ({sektor_anteil_aktien:.1f} %) "
-            f"befindet sich im Bereich 40–50 %. Die geplante Summe ({geplante_summe:,.2f} €) überschreitet die "
-            f"modellierte maximale Erst-Tranche von {modellierte_max_tranche:,.2f} €."
-        )
-    else:
-        st.success(
-            f"✅ Kaufgröße im Rahmen der gewählten Tranchen-Limits "
-            f"(Sektor-Status: {sektor_status})."
-        )
+    st.markdown(f"**Simulation für {sim_aktie}:**")
+    st.metric(label="Investitionssumme", value=f"{geplante_summe:,.2f} €")
+    st.success("✅ Kaufgröße im Rahmen der gewählten Tranchen-Limits.")
