@@ -235,23 +235,25 @@ with tab1:
                         else:
                             st.error("🔴 **Quality Rule:** Kauflimits AUSGESETZT! (Quality Score < 70). Erst fundamentale Erholung abwarten.")
 
-                    # Szenarien Details & Treiber
+                    # Szenarien Details & Treiber (Mathematisch transparent getrennt)
                     st.subheader("📌 Fundamentale Szenarien & Treiber")
                     sc1, sc2, sc3 = st.columns(3)
                     sc1.metric("Bear-Case (Konservativ)", f"{bear_case:.2f} {currency_symbol}")
-                    sc2.metric("Base-Case (Realistisch)", f"{base_case:.2f} {currency_symbol}")
+                    sc2.metric("Qualitäts-Base-Case", f"{base_case:.2f} {currency_symbol}")
                     sc3.metric("Best-Case (Optimistisch)", f"{best_case:.2f} {currency_symbol}")
 
                     if eval_eps:
+                        kgv_base_pure = (eval_eps * target_pe_base) + net_cash_per_share
+                        
                         drivers_df = pd.DataFrame({
-                            "Szenario": ["Bear-Case", "Base-Case", "Bull-Case"],
-                            f"EPS-Annahme ({currency_symbol})": [f"{bear_eps:.2f}", f"{eval_eps:.2f}", f"{bull_eps:.2f}"],
-                            "Ziel-KGV": [f"{target_pe_bear:.1f}x", f"{target_pe_base:.1f}x", f"{target_pe_bull:.1f}x"],
-                            f"Net Cash / Aktie": [f"+{net_cash_per_share:.2f} {currency_symbol}"] * 3,
-                            f"Errechneter Wert": [f"{bear_case:.2f} {currency_symbol}", f"{base_case:.2f} {currency_symbol}", f"{best_case:.2f} {currency_symbol}"]
+                            "Szenario": ["Bear-Case", "Reines KGV-Modell", "Qualitäts-Base-Case (Ziel)", "Bull-Case"],
+                            f"EPS-Annahme ({currency_symbol})": [f"{bear_eps:.2f}", f"{eval_eps:.2f}", f"{eval_eps:.2f}", f"{bull_eps:.2f}"],
+                            "Ziel-KGV": [f"{target_pe_bear:.1f}x", f"{target_pe_base:.1f}x", f"{target_pe_base:.1f}x (Gewichtet)", f"{target_pe_bull:.1f}x"],
+                            f"Net Cash / Aktie": [f"+{net_cash_per_share:.2f} {currency_symbol}"] * 4,
+                            f"Errechneter Wert": [f"{bear_case:.2f} {currency_symbol}", f"{kgv_base_pure:.2f} {currency_symbol}", f"{base_case:.2f} {currency_symbol}", f"{best_case:.2f} {currency_symbol}"]
                         })
                         st.table(drivers_df)
-                        st.caption("ℹ️ **Hinweis zum Bull Case:** Setzt sowohl überdurchschnittliches EPS-Wachstum als auch eine Multiple-Expansion (KGV-Ausweitung) voraus.")
+                        st.caption("ℹ️ **Hinweis zur Abweichung:** Der *Qualitäts-Base-Case* kombiniert KGV-, DCF- und FCF-Modelle. Das *Reine KGV-Modell* zeigt den theoretischen Einzelwert ohne den konservativen Sicherheitsabschlag der anderen Modelle.")
 
                     # Modell-Details
                     st.subheader("📐 Modell-Details")
@@ -280,11 +282,11 @@ with tab1:
                 st.error(f"Fehler bei der Datenabfrage: {str(e)}")
 
 # ==========================================
-# TAB 2: WATCHLIST & KAUFLIMITS
+# TAB 2: WATCHLIST, KAUFLIMITS & EXPORT
 # ==========================================
 with tab2:
-    st.subheader("📋 Mehrere Aktien im Vergleich (Watchlist)")
-    st.write("Gib mehrere Ticker ein (kommagetrennt), um Fair Value, Quality Score und Kauflimits auf einen Blick zu vergleichen.")
+    st.subheader("📋 Mehrere Aktien im Vergleich & Export")
+    st.write("Gib mehrere Ticker ein (kommagetrennt), um Fair Value, Quality Score und Kauflimits zu vergleichen und als CSV zu exportieren.")
     
     watchlist_input = st.text_input("Ticker-Liste:", value="COCO, AAPL, MSFT, TOST")
     calc_watchlist_btn = st.button("Watchlist berechnen", type="primary")
@@ -348,18 +350,29 @@ with tab2:
 
                     results.append({
                         "Ticker": t,
-                        f"Aktueller Kurs ({curr_sym})": f"{price:.2f}",
-                        f"Fair Value ({curr_sym})": f"{fv:.2f}",
+                        f"Aktueller Kurs ({curr_sym})": round(price, 2),
+                        f"Fair Value ({curr_sym})": round(fv, 2),
                         "Puffer (%)": f"{mos:+.1f} %",
                         "Quality Score": f"{score}/100",
-                        f"1. Limit (15%) ({curr_sym})": f"{limit_15:.2f}",
-                        f"2. Limit (25%) ({curr_sym})": f"{limit_25:.2f}",
+                        f"1. Limit (15%) ({curr_sym})": round(limit_15, 2),
+                        f"2. Limit (25%) ({curr_sym})": round(limit_25, 2),
                         "Signal": signal
                     })
                 except Exception:
                     pass
         
         if results:
-            st.table(pd.DataFrame(results))
+            df_results = pd.DataFrame(results)
+            st.table(df_results)
+            
+            # CSV Export
+            csv_data = df_results.to_csv(index=False).encode('utf-8')
+            st.download_button(
+                label="📥 Watchlist als CSV herunterladen",
+                data=csv_data,
+                file_name="aktien_watchlist_analysator.csv",
+                mime="text/csv",
+                type="secondary"
+            )
         else:
             st.warning("Keine Daten für die angegebenen Ticker gefunden.")
