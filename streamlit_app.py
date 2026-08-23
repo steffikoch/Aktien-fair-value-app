@@ -449,7 +449,7 @@ with tab_c:
             st.divider()
             st.markdown("#### 🎯 8-Punkte-Checkliste (Portfolio Fit)")
 
-            fit_ok = True
+            hard_limit_ok = True
             
             # 1. Bewertung
             c_val = "🟢" if sim_data["raw_mos"] > 15 else ("🟡" if sim_data["raw_mos"] > 0 else "🔴")
@@ -458,27 +458,29 @@ with tab_c:
             # 2. Qualität
             c_qual = "🟢" if sim_data["raw_quality"] >= 65 else ("🟡" if sim_data["raw_quality"] >= 50 else "🔴")
             check_qual = f"{c_qual} **2. Qualität:** Quality Score {sim_data['Quality']}"
-            if sim_data["raw_quality"] < 50: fit_ok = False
+            if sim_data["raw_quality"] < 50: hard_limit_ok = False
 
             # 3. Einzelposition
             c_pos = "🟢" if new_pos_weight <= limit_pct_input else "🔴"
             check_pos = f"{c_pos} **3. Einzelpositionsgewicht:** {new_pos_weight:.1f} % (Limit: {limit_pct_input:.1f} % | Spielraum: {spielraum_pos_after:,.2f} €)"
-            if new_pos_weight > limit_pct_input: fit_ok = False
+            if new_pos_weight > limit_pct_input: hard_limit_ok = False
 
             # 4. Aktienquote
             c_quote = "🟢" if quote_after <= target_stock_quote_max else "🔴"
             check_quote = f"{c_quote} **4. Gesamte Aktienquote:** {quote_after:.1f} % (Max: {target_stock_quote_max:.1f} % | Spielraum: {spielraum_quote_after:,.2f} €)"
-            if quote_after > target_stock_quote_max: fit_ok = False
+            if quote_after > target_stock_quote_max: hard_limit_ok = False
 
             # 5. Sektorgewicht am Gesamtdepot
             c_sec = "🟢" if new_sector_weight <= sector_limit_pct_input else "🔴"
             check_sec = f"{c_sec} **5. Sektorgewicht (am Gesamtdepot):** {new_sector_weight:.1f} % (Limit: {sector_limit_pct_input:.1f} % | Spielraum: {spielraum_sector_after:,.2f} €)"
-            if new_sector_weight > sector_limit_pct_input: fit_ok = False
+            if new_sector_weight > sector_limit_pct_input: hard_limit_ok = False
 
-            # 6. Sektor-Konzentration (DOPPELTE BETRACHTUNG)
+            # 6. Sektor-Konzentration am Aktienportfolio
+            high_concentration = False
             if sector_share_of_equities_after > 60.0:
                 c_conc = "🔴"
                 rating_str = "Hohe Konzentration innerhalb des Aktienanteils"
+                high_concentration = True
             elif sector_share_of_equities_after > 35.0:
                 c_conc = "🟡"
                 rating_str = "Moderate Konzentration innerhalb des Aktienanteils"
@@ -505,14 +507,17 @@ with tab_c:
             c_conf = "🟢" if sim_data["Confidence"] == "Hoch" else ("🟡" if sim_data["Confidence"] == "Mittel" else "🔴")
             check_conf = f"{c_conf} **8. Modellrisiko & Confidence:** Level {sim_data['Confidence']} ({sim_data['Plausibility_Status']})"
 
-            # AUSGABE ENDURTEIL
-            if fit_ok and "🔴" not in sim_data["Plausibility_Status"]:
-                if "🟡" in sim_data["Plausibility_Status"] or new_sector_weight > (sector_limit_pct_input * 0.8) or sector_share_of_equities_after > 50.0:
-                    st.warning("### 🟡 KAUF MÖGLICH – MODELL / SEKTOR MIT VORSICHT PRÜFEN")
-                else:
-                    st.success("### 🟢 KAUF PASST OPTIMAL INS DEPOT")
+            # =========================================================
+            # NEUES GEWICHTETES ENDURTEIL (5 STUFEN RISIKOMANAGEMENT)
+            # =========================================================
+            if not hard_limit_ok or "🔴 Daten-/Modellwarnung" in sim_data["Plausibility_Status"]:
+                st.error("### 🔴 KEIN KAUF EMPFOHLEN (Limit-Überschreitung oder negatives Modell-Signal)")
+            elif high_concentration:
+                st.warning(f"### 🟠 KAUF MÖGLICH – GEDROSSELT / KONZENTRATION BEACHTEN\nℹ️ **Grund:** Aktie fundamental attraktiv, aber Sektor '{sim_data['Sector']}' würde nach Kauf **{sector_share_of_equities_after:.1f} %** deines gesamten Aktienportfolios ausmachen.")
+            elif "🟡" in sim_data["Plausibility_Status"] or new_sector_weight > (sector_limit_pct_input * 0.8) or sector_share_of_equities_after > 35.0:
+                st.warning("### 🟡 KAUF MÖGLICH – MODELL / SEKTOR MIT VORSICHT PRÜFEN")
             else:
-                st.error("### 🔴 KAUF NICHT EMPFOHLEN (Limit- oder Sektor-Überschreitung)")
+                st.success("### 🟢 KAUF PASST OPTIMAL INS DEPOT")
 
             # Prüfpunkte untereinander ausgeben
             cols_check1, cols_check2 = st.columns(2)
