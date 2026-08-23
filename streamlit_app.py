@@ -8,10 +8,10 @@ import requests
 st.set_page_config(page_title="4-Score Depot Engine", layout="wide", page_icon="📈")
 
 st.title("📈 4-Score Depot- & Allokations-Engine (3–5 Jahre Horizont)")
-st.caption("Transparente, mehrdimensionale Aktienanalyse & Risikosteuerung")
+st.caption("Transparente, mehrdimensionale Aktienanalyse & Netto-Renditeprognose")
 
 # =============================================================
-# HELPER: TICKER RESOLUTION (NAMEN IN TICKER UMWANDELN)
+# HELPER: TICKER RESOLUTION
 # =============================================================
 def resolve_ticker_symbol(user_input):
     user_input = user_input.strip()
@@ -48,7 +48,7 @@ def resolve_ticker_symbol(user_input):
     return user_input.upper()
 
 # =============================================================
-# HELPER: ENHANCED 4-SCORE BERECHNUNG (3-5 JAHRE HORIZONT)
+# HELPER: ENHANCED 4-SCORE BERECHNUNG & NETTO-RENDITEPROGNOSE
 # =============================================================
 def analyze_stock_4score(symbol, current_position_val, total_portfolio_val):
     try:
@@ -68,6 +68,7 @@ def analyze_stock_4score(symbol, current_position_val, total_portfolio_val):
         fcf = info.get('freeCashflow')
         eps_growth = (info.get('earningsGrowth') or 0.0) * 100
         rev_growth = (info.get('revenueGrowth') or 0.0) * 100
+        div_yield = (info.get('dividendYield') or 0.0) * 100
         beta = info.get('beta')
         total_cash = info.get('totalCash', 0) or 0
         total_debt = info.get('totalDebt', 0) or 0
@@ -84,7 +85,6 @@ def analyze_stock_4score(symbol, current_position_val, total_portfolio_val):
         # -------------------------------------------------------------
         # SCORE 1: QUALITY SCORE (0 - 100 Pkt.)
         # -------------------------------------------------------------
-        # A) Profitabilität (max 25 Pkt.)
         p_score = 0
         if net_margin >= 15: p_score += 15
         elif net_margin >= 5: p_score += 10
@@ -94,13 +94,18 @@ def analyze_stock_4score(symbol, current_position_val, total_portfolio_val):
         elif roe >= 8: p_score += 6
         elif roe > 0: p_score += 2
 
-        # B) Mittelfristiges Wachstum - Staffelung (max 20 Pkt.)
-        if medium_term_growth >= 12.0: g_score = 20
-        elif medium_term_growth >= 5.0: g_score = 13
-        elif medium_term_growth >= 0.0: g_score = 7
-        else: g_score = 2
+        growth_note = ""
+        if medium_term_growth >= 12.0: 
+            g_score = 20
+        elif medium_term_growth >= 5.0: 
+            g_score = 13
+        elif medium_term_growth >= 0.0: 
+            g_score = 7
+            growth_note = "Moderates/Stagnierendes Wachstum dämpft den Score."
+        else: 
+            g_score = 2
+            growth_note = "Rückläufige Kennzahlen führen zu Punktabzug."
 
-        # C) Bilanz & Verschuldung im 3-5-Jahre-Licht (max 20 Pkt.)
         if net_cash_ps > 0:
             b_score = 20
         else:
@@ -109,7 +114,6 @@ def analyze_stock_4score(symbol, current_position_val, total_portfolio_val):
             elif debt_to_ebitda < 5.0 and fcf and fcf > 0: b_score = 10
             else: b_score = 4
 
-        # D) Cashflow (max 20 Pkt.)
         if fcf is None:
             c_score = 10
             fcf_status = "⚪ Keine Daten"
@@ -123,7 +127,6 @@ def analyze_stock_4score(symbol, current_position_val, total_portfolio_val):
             c_score = 0
             fcf_status = "🔴 Negativ"
 
-        # E) Stabilität & Risiko (max 15 Pkt.)
         if beta is None: r_score = 8
         elif beta < 1.0: r_score = 15
         elif beta < 1.3: r_score = 9
@@ -132,25 +135,20 @@ def analyze_stock_4score(symbol, current_position_val, total_portfolio_val):
         quality_score = min(100, p_score + g_score + b_score + c_score + r_score)
 
         # -------------------------------------------------------------
-        # SCORE 2: FAIR-VALUE CONFIDENCE SCORE (0 - 100 Pkt.)
+        # SCORE 2: FAIR-VALUE CONFIDENCE SCORE
         # -------------------------------------------------------------
         conf_score = 100
         if net_margin < 3.0: conf_score -= 35
         elif net_margin < 7.0: conf_score -= 15
-        
         if fcf is None: conf_score -= 15
         elif fcf <= 0: conf_score -= 25
-        
         if quality_score < 45: conf_score -= 20
         if beta and beta > 1.25: conf_score -= 10
         
         conf_score = max(0, min(100, conf_score))
-        
-        if conf_score >= 75: fv_conf_text = "🟢 HOCH"
-        elif conf_score >= 45: fv_conf_text = "🟡 MITTEL"
-        else: fv_conf_text = "🔴 NIEDRIG"
+        fv_conf_text = "🟢 HOCH" if conf_score >= 75 else ("🟡 MITTEL" if conf_score >= 45 else "🔴 NIEDRIG")
 
-        # Fair Value (auf 3-5-Jahres-KGV-Abzinsung ausgerichtet)
+        # Fair Value Berechnung
         target_pe = min(22.0, max(11.0, 12.0 + (max(0, medium_term_growth) * 0.4)))
         fv_vals = []
         if eps > 0: fv_vals.append((eps * target_pe) + max(0, net_cash_ps))
@@ -158,6 +156,17 @@ def analyze_stock_4score(symbol, current_position_val, total_portfolio_val):
         
         fair_value = np.mean(fv_vals) if fv_vals else price
         mos = ((fair_value - price) / price) * 100 if fair_value > 0 else 0.0
+
+        # -------------------------------------------------------------
+        # NETTO-RENDITEPROGNOSE (3-5 JAHRE p.a. / OHNE REINVESTITION)
+        # -------------------------------------------------------------
+        TAX_RATE = 0.26375  # Abgeltungsteuer + Soli (DE)
+        
+        net_div_yield = div_yield * (1 - TAX_RATE)
+        gross_cap_gains_pa = max(0, medium_term_growth * 0.5) + (mos / 4.0)
+        net_cap_gains_pa = gross_cap_gains_pa * (1 - TAX_RATE)
+        
+        expected_return_pa_net = net_div_yield + net_cap_gains_pa
 
         # -------------------------------------------------------------
         # SCORE 3: RISK & CAPITAL EFFICIENCY SCORE
@@ -192,6 +201,7 @@ def analyze_stock_4score(symbol, current_position_val, total_portfolio_val):
             "fair_value": fair_value,
             "margin_of_safety": mos,
             "quality_score": quality_score,
+            "growth_note": growth_note,
             "quality_pillars": {
                 "Profitabilität": (p_score, 25),
                 "Wachstum (3-5 J.)": (g_score, 20),
@@ -207,6 +217,10 @@ def analyze_stock_4score(symbol, current_position_val, total_portfolio_val):
             "pos_status": pos_status,
             "net_margin": net_margin,
             "fcf_status": fcf_status,
+            "div_yield": div_yield,
+            "net_div_yield": net_div_yield,
+            "net_cap_gains_pa": net_cap_gains_pa,
+            "expected_return_pa_net": expected_return_pa_net,
             "sector": sector
         }
     except Exception:
@@ -241,6 +255,7 @@ if ticker_input:
         rc_score = res["risk_cap_score"]
         fit_score = res["fit_score"]
         weight_pct = res["weight_pct"]
+        exp_ret_net = res["expected_return_pa_net"]
         
         limits_active = True
         
@@ -253,6 +268,9 @@ if ticker_input:
         elif conf_score < 45:
             final_action = "🔴 KEIN KAUF (Fair Value unsicher)"
             limits_active = False
+        elif exp_ret_net < 3.0:
+            final_action = "🔴 KEIN KAUF (Netto-Rendite unter 3.0% p.a.)"
+            limits_active = True
         elif rc_score < 40 or mos < 10:
             final_action = "🟠 ABWARTEN (Sicherheitspuffer zu gering)"
             limits_active = True
@@ -272,21 +290,16 @@ if ticker_input:
         else:
             st.success(f"### 🎯 ENDGÜLTIGES DEPOT-URTEIL: {final_action}")
 
-        # Ursachen-Synthese Box
-        st.markdown("#### 🔎 Entscheidungs-Matrix (Warum dieses Urteil?)")
+        # Entscheidungs-Matrix
+        st.markdown("#### 🔎 Entscheidungs-Matrix")
         u_cols = st.columns(4)
         with u_cols[0]:
-            if weight_pct > 7.5:
-                st.write(f"🔴 **Hauptgrund:** Depotgewicht hoch ({weight_pct:.1f}%)")
-            else:
-                st.write(f"🟢 **Depotgewicht:** Im Zielbereich ({weight_pct:.1f}%)")
+            if weight_pct > 7.5: st.write(f"🔴 **Depotgewicht:** Hoch ({weight_pct:.1f}%)")
+            else: st.write(f"🟢 **Depotgewicht:** Im Zielbereich ({weight_pct:.1f}%)")
         with u_cols[1]:
-            if mos < 10:
-                st.write(f"🔴 **Puffer:** Zu gering ({mos:+.1f}%)")
-            elif mos < 12:
-                st.write(f"🟠 **Puffer:** Moderat ({mos:+.1f}%)")
-            else:
-                st.write(f"🟢 **Puffer:** Gut ({mos:+.1f}%)")
+            if mos < 10: st.write(f"🔴 **Puffer:** Zu gering ({mos:+.1f}%)")
+            elif mos < 12: st.write(f"🟠 **Puffer:** Moderat ({mos:+.1f}%)")
+            else: st.write(f"🟢 **Puffer:** Gut ({mos:+.1f}%)")
         with u_cols[2]:
             q_icon = "🟢" if q_score >= 65 else ("🟡" if q_score >= 45 else "🔴")
             st.write(f"{q_icon} **Quality:** {q_score}/100")
@@ -294,6 +307,12 @@ if ticker_input:
             st.write(f"{res['fv_conf_text']} **Model Conf.:** {conf_score}/100")
 
         st.markdown("---")
+        
+        # Netto-Renditeprognose Highlight Box
+        ret_icon = "🟢" if exp_ret_net >= 5.0 else ("🟡" if exp_ret_net >= 3.0 else "🔴")
+        st.info(f"### 📈 Erwartete Netto-Rendite (3–5 Jahre): {ret_icon} **{exp_ret_net:.1f} % p.a. (nach Steuern)**\n"
+                f"*(Zusammensetzung: Netto-Dividende {res['net_div_yield']:.1f}% + Netto-Kursgewinn p.a. {res['net_cap_gains_pa']:.1f}% | Abgeltungsteuer 26,375% berücksichtigt)*")
+
         st.subheader("📊 DIE 4 SCORES")
         s1, s2, s3, s4 = st.columns(4)
         
@@ -319,16 +338,28 @@ if ticker_input:
             with pil_cols[idx]:
                 st.markdown(f"**{pillar_name}**")
                 st.write(f"{p_color} **{achieved}** / {max_pts} Pkt.")
+        
+        if res["growth_note"]:
+            st.caption(f"💡 *Hinweis zum Wachstum:* {res['growth_note']}")
 
         st.markdown("---")
-        st.subheader("🎯 Handlungsmarken & Kauflimits")
+        st.subheader("🎯 Handlungsmarken & Kaufzonen-Status")
         limit_12 = fv * 0.88
         limit_20 = fv * 0.80
 
         if not limits_active:
             st.error("⚠️ KAUFLIMITS AUSGESETZT: Qualität zu schwach, Fair Value unsicher oder Depot-Limits erreicht.")
-            st.caption(f"*(Theoretische mathematische Marken: 12% Rabatt = {limit_12:.2f} {curr_sym} | 20% Rabatt = {limit_20:.2f} {curr_sym})*")
         else:
+            if price <= limit_20:
+                st.success(f"🟢 **AKTUELL IN STARKER KAUFZONE (≥ 20% Rabatt)!**\n\n"
+                           f"Aktueller Kurs (`{price:.2f} {curr_sym}`) liegt unter dem 20%-Limit (`{limit_20:.2f} {curr_sym}`).")
+            elif price <= limit_12:
+                st.success(f"🟢 **AKTUELL IN KAUFZONE (≥ 12% Rabatt)!**\n\n"
+                           f"Aktueller Kurs (`{price:.2f} {curr_sym}`) liegt unter dem 12%-Limit (`{limit_12:.2f} {curr_sym}`).")
+            else:
+                st.warning(f"🟡 **KEINE KAUFZONE (Sicherheitspuffer noch nicht erreicht)**\n\n"
+                           f"Aktueller Kurs: `{price:.2f} {curr_sym}` | Nächstes Ziel (12% Rabatt): `{limit_12:.2f} {curr_sym}`")
+
             l1, l2 = st.columns(2)
-            with l1: st.success(f"**1. Kauflimit (12 % Rabatt):** `{limit_12:.2f} {curr_sym}`")
-            with l2: st.success(f"**2. Kauflimit (20 % Rabatt):** `{limit_20:.2f} {curr_sym}`")
+            with l1: st.write(f"**1. Kauflimit (12 % Rabatt):** `{limit_12:.2f} {curr_sym}`")
+            with l2: st.write(f"**2. Kauflimit (20 % Rabatt):** `{limit_20:.2f} {curr_sym}`")
