@@ -70,7 +70,8 @@ def analyze_stock_full(symbol, shares_count=0.0, buy_price=0.0, total_portfolio_
         p_score += 10 if roe >= 15 else (6 if roe >= 8 else (2 if roe > 0 else 0))
         g_score = 20 if medium_term_growth >= 12.0 else (13 if medium_term_growth >= 5.0 else (7 if medium_term_growth >= 0.0 else 2))
         
-        if net_cash_ps > 0: b_score = 20
+        if net_cash_ps > 0: 
+            b_score = 20
         else:
             debt_to_ebitda = (total_debt / ebitda) if ebitda > 0 else 99
             b_score = 15 if debt_to_ebitda < 3.0 else (10 if debt_to_ebitda < 5.0 and fcf > 0 else 4)
@@ -121,7 +122,7 @@ def analyze_stock_full(symbol, shares_count=0.0, buy_price=0.0, total_portfolio_
         ret_3y_net = net_cg_3y + net_div
         ret_5y_net = net_cg_5y + net_div
 
-        # Kauflimit (z.B. Fair Value abzüglich 10% Sicherheitsmarge)
+        # Kauflimit (z. B. Fair Value abzüglich 10 % Sicherheitsmarge)
         buy_limit = fv_base * 0.90
 
         # 4. Depot-Allokation
@@ -198,7 +199,7 @@ tab_a, tab_b, tab_c = st.tabs([
 # =============================================================
 with tab_a:
     st.subheader("🟢 A. Einzelaktien-Analyse")
-    st.info("ℹ️ **Hinweis:** Depotdaten werden bei diesem Check **nicht** berücksichtigt. Reines Bewertungstool.")
+    st.info("ℹ️ **Hinweis:** Depotdaten werden bei diesem Check **nicht** berücksichtigt. Fundamentalanalyse – unabhängig vom Depot.")
     
     query_a = st.text_input("Aktie oder Ticker eingeben (z. B. COCO, DTE.DE, AAPL, Münchener Rück):", key="search_a").strip()
     
@@ -313,8 +314,8 @@ with tab_b:
         st.markdown(f"#### 🎯 Aktienquoten-Steuerung ({target_stock_quote_min} % – {target_stock_quote_max} % Korridor)")
         
         q_col1, q_col2, q_col3 = st.columns(3)
-        q_col1.metric("Bis Untergrenze (10 %)", f"{dist_to_min:,.2f} €", delta="Erreicht" if dist_to_min == 0 else f"Noch {dist_to_min:,.2f} €")
-        q_col2.metric("Verbleibender Spielraum bis 20 %", f"{dist_to_max:,.2f} €", delta=f"{dist_to_max:,.2f} € verfügbar", delta_color="normal")
+        q_col1.metric(f"Bis Untergrenze ({target_stock_quote_min} %)", f"{dist_to_min:,.2f} €", delta="Erreicht" if dist_to_min == 0 else f"Noch {dist_to_min:,.2f} €")
+        q_col2.metric(f"Verbleibender Spielraum bis {target_stock_quote_max} %", f"{dist_to_max:,.2f} €", delta=f"{dist_to_max:,.2f} € verfügbar", delta_color="normal")
         
         if allocated_pct < target_stock_quote_min:
             q_col3.error(f"Quote zu niedrig: {allocated_pct:.1f}%")
@@ -372,7 +373,7 @@ with tab_c:
             s1, s2, s3, s4 = st.columns(4)
             s1.metric("Aktienquote Vorher ➔ Nachher", f"{quote_before:.1f} % ➔ {quote_after:.1f} %")
             s2.metric("Positionsgewicht Nachher", f"{new_pos_weight:.1f} %", delta=f"Limit: {limit_pct_input:.1f}%")
-            s3.metric("Verbl. Quoten-Spielraum (20%)", f"{spielraum_quote_after:,.2f} €")
+            s3.metric(f"Verbl. Quoten-Spielraum ({target_stock_quote_max}%)", f"{spielraum_quote_after:,.2f} €")
             s4.metric("Verbl. Positions-Spielraum", f"{spielraum_pos_after:,.2f} €")
             
             st.divider()
