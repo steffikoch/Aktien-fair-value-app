@@ -104,10 +104,13 @@ with tab1:
                     if vals:
                         base_case = np.average(vals, weights=weights)
                         
-                        # Dynamische fundamentale Szenarien
+                        # Dynamische fundamentale Szenarien mit expliziten Treibern
+                        bear_eps = (eval_eps * 0.85) if eval_eps else 0
+                        bull_eps = (eval_eps * 1.15) if eval_eps else 0
+                        
                         if eval_eps and eval_eps > 0:
-                            bear_case = ((eval_eps * 0.85) * target_pe_bear) + net_cash_per_share
-                            best_case = ((eval_eps * 1.15) * target_pe_bull) + net_cash_per_share
+                            bear_case = (bear_eps * target_pe_bear) + net_cash_per_share
+                            best_case = (bull_eps * target_pe_bull) + net_cash_per_share
                         else:
                             bear_case = base_case * 0.75
                             best_case = base_case * 1.35
@@ -117,7 +120,7 @@ with tab1:
                         base_case, bear_case, best_case = current_price, current_price, current_price
                         margin_of_safety = 0.0
 
-                    # 5. Quality Score (Entkoppelt von der Bewertung)
+                    # 5. Quality Score (Entkoppelt von Bewertung)
                     score_growth = min(20, max(0, int(growth_rate * 0.8)))
                     score_margin = min(20, max(0, int(profit_margins * 100 * 1.2)))
                     score_cash = 20 if net_cash_per_share > 0 else 5
@@ -136,7 +139,7 @@ with tab1:
                     col3.metric("Sicherheitspuffer", f"{margin_of_safety:.1f} %" if vals else "0.0 %")
                     col4.metric("Quality Score", f"{quality_score} / 100 Pkt.")
 
-                    # Urteils-Matrix (Kombination aus Qualität & Preis)
+                    # Urteils-Matrix
                     st.subheader("📢 Gesamturteil")
                     if not vals:
                         st.info("Urteil: **NEUTRAL / UNRENTABEL** (Keine ausreichenden Gewinne/FCF vorhanden)")
@@ -160,11 +163,14 @@ with tab1:
                         upside_base = ((base_case - current_price) / current_price) * 100
                         downside_bear = ((bear_case - current_price) / current_price) * 100
                         upside_bull = ((best_case - current_price) / current_price) * 100
+                        
+                        rrr = abs(upside_bull / downside_bear) if downside_bear != 0 else 0
 
-                        cr1, cr2, cr3 = st.columns(3)
+                        cr1, cr2, cr3, cr4 = st.columns(4)
                         cr1.metric("Bear-Case Downside", f"{downside_bear:+.1f} %", delta_color="inverse")
                         cr2.metric("Fair Value Upside", f"{upside_base:+.1f} %")
                         cr3.metric("Bull-Case Upside", f"{upside_bull:+.1f} %")
+                        cr4.metric("Chance/Risiko-Ratio (RRR)", f"{rrr:.2f}x")
 
                     # Kauflimit-Rechner
                     if vals:
@@ -187,13 +193,30 @@ with tab1:
                             ]
                         })
                         st.table(limits_df)
+                        
+                        # Qualitäts-Achtung bei Kursrückgang
+                        if earnings_growth < 0 or profit_margins < 0.05:
+                            st.warning("⚠️ **Achtung:** Kauflimits nur gültig, wenn der Kursrückgang rein marktbedingt ist. Bei fallenden Gewinnen/Margen müssen die Limits neu berechnet werden!")
+                        else:
+                            st.info("💡 **Qualitäts-Regel:** Kauflimits sind gültig, solange der Quality Score stark bleibt (z. B. > 70/100).")
 
-                    # Szenarien Details
-                    st.subheader("📌 Fundamentale Szenarien")
+                    # Szenarien Details & Treiber
+                    st.subheader("📌 Fundamentale Szenarien & Treiber")
                     sc1, sc2, sc3 = st.columns(3)
                     sc1.metric("Bear-Case (Konservativ)", f"{bear_case:.2f} {currency_symbol}")
                     sc2.metric("Base-Case (Realistisch)", f"{base_case:.2f} {currency_symbol}")
                     sc3.metric("Best-Case (Optimistisch)", f"{best_case:.2f} {currency_symbol}")
+
+                    # Tabelle der Szenario-Treiber
+                    if eval_eps:
+                        drivers_df = pd.DataFrame({
+                            "Szenario": ["Bear-Case", "Base-Case", "Bull-Case"],
+                            f"EPS-Annahme ({currency_symbol})": [f"{bear_eps:.2f}", f"{eval_eps:.2f}", f"{bull_eps:.2f}"],
+                            "Ziel-KGV": [f"{target_pe_bear:.1f}x", f"{target_pe_base:.1f}x", f"{target_pe_bull:.1f}x"],
+                            f"Net Cash / Aktie": [f"+{net_cash_per_share:.2f} {currency_symbol}"] * 3,
+                            f"Errechneter Wert": [f"{bear_case:.2f} {currency_symbol}", f"{base_case:.2f} {currency_symbol}", f"{best_case:.2f} {currency_symbol}"]
+                        })
+                        st.table(drivers_df)
 
                     # Modell-Details
                     st.subheader("📐 Modell-Details")
