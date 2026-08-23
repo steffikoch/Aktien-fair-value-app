@@ -227,7 +227,7 @@ if "portfolio" not in st.session_state:
         {"ticker": "MUV2.DE", "shares": 14.0, "buy_price": 543.30}
     ]
 
-# ZENTRALE DEPOT-BERECHNUNG (FÜR TAB B & TAB C)
+# ZENTRALE DEPOT-BERECHNUNG
 portfolio_analyzed = []
 for item in st.session_state.portfolio:
     res = analyze_stock_full(item["ticker"], item["shares"], item["buy_price"], depot_val_input, limit_pct_input, tax_allowance_input)
@@ -420,11 +420,11 @@ with tab_c:
             new_pos_weight = (new_pos_val / depot_val_input) * 100
             
             sector_weight_before = (existing_sector_val / depot_val_input) * 100
+            sector_share_equities_before = (existing_sector_val / total_stock_val_before * 100) if total_stock_val_before > 0 else 0.0
+            
             new_sector_val = existing_sector_val + sim_amount
             new_sector_weight = (new_sector_val / depot_val_input) * 100
-            
-            # Sektoranteil AM REINEN AKTIENPORTFOLIO
-            sector_share_of_equities_after = (new_sector_val / total_stock_val_after * 100) if total_stock_val_after > 0 else 0.0
+            sector_share_equities_after = (new_sector_val / total_stock_val_after * 100) if total_stock_val_after > 0 else 0.0
             
             # Freie Spielräume
             max_target_eur = (target_stock_quote_max / 100.0) * depot_val_input
@@ -475,13 +475,13 @@ with tab_c:
             check_sec = f"{c_sec} **5. Sektorgewicht (am Gesamtdepot):** {new_sector_weight:.1f} % (Limit: {sector_limit_pct_input:.1f} % | Spielraum: {spielraum_sector_after:,.2f} €)"
             if new_sector_weight > sector_limit_pct_input: hard_limit_ok = False
 
-            # 6. Sektor-Konzentration am Aktienportfolio
+            # 6. Sektor-Konzentration (ERWEITERTE VORHER-NACHHER METRIK)
             high_concentration = False
-            if sector_share_of_equities_after > 60.0:
+            if sector_share_equities_after > 60.0:
                 c_conc = "🔴"
                 rating_str = "Hohe Konzentration innerhalb des Aktienanteils"
                 high_concentration = True
-            elif sector_share_of_equities_after > 35.0:
+            elif sector_share_equities_after > 35.0:
                 c_conc = "🟡"
                 rating_str = "Moderate Konzentration innerhalb des Aktienanteils"
             else:
@@ -492,12 +492,13 @@ with tab_c:
             all_holdings = list(set(existing_sector_tickers + [sim_data['Ticker']]))
             holdings_after_str = " + ".join(all_holdings)
 
+            discipline_note = f"\n⚠️ **Kapital-Disziplin:** Kein weiterer Nachkauf im Sektor `{sim_data['Sector']}` empfohlen, solange der Aktienanteil nicht durch andere Sektoren breiter diversifiziert ist." if high_concentration else ""
+
             check_sim = f"""{c_conc} **6. Sektor-Konzentration ({sim_data['Sector']}):**
-- **Anteil am Gesamtdepot:** {new_sector_weight:.1f} % (Limit: {sector_limit_pct_input:.1f} %)
-- **Anteil am Aktienportfolio:** {sector_share_of_equities_after:.1f} %
-- **Bestehende Positionen:** {holdings_before_str}
-- **Nach Kauf:** {holdings_after_str}
-- **Bewertung:** {c_conc} {rating_str}"""
+- **Vor Kauf:** {sector_weight_before:.1f} % des Gesamtdepots / {sector_share_equities_before:.1f} % der Aktien ({holdings_before_str})
+- **Simulierter Kauf:** +{sim_amount:,.2f} € (`{sim_data['Ticker']}`)
+- **Nach Kauf:** {new_sector_weight:.1f} % des Gesamtdepots / {sector_share_equities_after:.1f} % der Aktien ({holdings_after_str})
+- **Bewertung:** {c_conc} {rating_str}{discipline_note}"""
 
             # 7. Erwartete Rendite
             c_ret = "🟢" if sim_data["raw_ret_3y"] >= 8.0 else "🟡"
@@ -508,13 +509,13 @@ with tab_c:
             check_conf = f"{c_conf} **8. Modellrisiko & Confidence:** Level {sim_data['Confidence']} ({sim_data['Plausibility_Status']})"
 
             # =========================================================
-            # NEUES GEWICHTETES ENDURTEIL (5 STUFEN RISIKOMANAGEMENT)
+            # ENDURTEIL (5 STUFEN RISIKOMANAGEMENT)
             # =========================================================
             if not hard_limit_ok or "🔴 Daten-/Modellwarnung" in sim_data["Plausibility_Status"]:
                 st.error("### 🔴 KEIN KAUF EMPFOHLEN (Limit-Überschreitung oder negatives Modell-Signal)")
             elif high_concentration:
-                st.warning(f"### 🟠 KAUF MÖGLICH – GEDROSSELT / KONZENTRATION BEACHTEN\nℹ️ **Grund:** Aktie fundamental attraktiv, aber Sektor '{sim_data['Sector']}' würde nach Kauf **{sector_share_of_equities_after:.1f} %** deines gesamten Aktienportfolios ausmachen.")
-            elif "🟡" in sim_data["Plausibility_Status"] or new_sector_weight > (sector_limit_pct_input * 0.8) or sector_share_of_equities_after > 35.0:
+                st.warning(f"### 🟠 KAUF MÖGLICH – GEDROSSELT / KONZENTRATION BEACHTEN\nℹ️ **Hinweis:** Aktie fundamental attraktiv, aber der Sektor `{sim_data['Sector']}` würde nach Kauf **{sector_share_equities_after:.1f} %** deines Aktienportfolios ausmachen.")
+            elif "🟡" in sim_data["Plausibility_Status"] or new_sector_weight > (sector_limit_pct_input * 0.8) or sector_share_equities_after > 35.0:
                 st.warning("### 🟡 KAUF MÖGLICH – MODELL / SEKTOR MIT VORSICHT PRÜFEN")
             else:
                 st.success("### 🟢 KAUF PASST OPTIMAL INS DEPOT")
