@@ -195,13 +195,15 @@ def analyze_stock_4score(symbol, current_position_val, total_portfolio_val):
         risk_cap_score = min(100, max(0, mos_part + qual_part))
 
         # -------------------------------------------------------------
-        # SCORE 4: PORTFOLIO FIT & DEPOTKAPAZITÄT (MAXIMALGEWICHT 7.5 %)
+        # SCORE 4: PORTFOLIO FIT & DYNAMISCHE DEPOTKAPAZITÄT (MAX 7.5 %)
         # -------------------------------------------------------------
         weight_pct = (current_position_val / total_portfolio_val * 100) if total_portfolio_val > 0 else 0.0
         max_weight_limit = 7.5
         
+        # Exakte mathematische Berechnung der verbleibenden Kapazität basierend auf dem echten Gesamtdepotwert
         remaining_cap_pct = max(0.0, max_weight_limit - weight_pct)
-        max_buy_eur = (remaining_cap_pct / 100.0) * total_portfolio_val
+        max_allowed_position_eur = (max_weight_limit / 100.0) * total_portfolio_val
+        max_buy_eur = max(0.0, max_allowed_position_eur - current_position_val)
 
         if weight_pct > 10.0:
             fit_score = 0
