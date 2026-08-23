@@ -29,7 +29,7 @@ def search_ticker(query):
     return clean_query.upper()
 
 # =============================================================
-# HELPER: BERECHNUNGS-ENGINE (FINANZWERT-ANGEPASST & PLAUSIBILITÄT)
+# HELPER: BERECHNUNGS-ENGINE (MIT FINANZWERT- & RENDITE-SENSITIVITÄT)
 # =============================================================
 def analyze_stock_full(symbol, shares_count=0.0, buy_price=0.0, total_portfolio_val=65000.0, max_weight_limit=10.0, tax_free_allowance=1000.0):
     try:
@@ -73,8 +73,8 @@ def analyze_stock_full(symbol, shares_count=0.0, buy_price=0.0, total_portfolio_
         g_score = 20 if medium_term_growth >= 12.0 else (13 if medium_term_growth >= 5.0 else (7 if medium_term_growth >= 0.0 else 2))
         
         if is_financial:
-            b_score = 20 # Bei Finanzwerten wird Bilanzstruktur primär über ROE & Regulierungs-Kapital reflektiert
-            c_score = 20 # FCF bei Versicherungen/Banken nicht repräsentativ
+            b_score = 20  # Eigenkapital/Bilanz über ROE & Aufsicht abgedeckt
+            c_score = 20  # FCF bei Versicherungen/Banken nicht repräsentativ
         else:
             if net_cash_ps > 0: 
                 b_score = 20
@@ -136,14 +136,17 @@ def analyze_stock_full(symbol, shares_count=0.0, buy_price=0.0, total_portfolio_
         ret_3y_net = net_cg_3y + net_div
         ret_5y_net = net_cg_5y + net_div
 
-        # 4. Plausibilitäts-Check
+        # 4. Plausibilitäts-Check & Warnungen
         plausibility_status = "🟢 Modell plausibel"
         plausibility_notes = []
         
         if ret_3y_net > 25.0:
+            plausibility_status = "🔴 Daten-/Modellwarnung"
+            plausibility_notes.append(f"🚨 Renditeprognose ({ret_3y_net:.1f}% p.a.) außergewöhnlich hoch. Basiert massiv auf Markt-Neubewertung ({revaluation_p_a_3y:.1f}% p.a.).")
+        elif ret_3y_net >= 15.0:
             plausibility_status = "🟡 Modell mit Vorsicht interpretieren"
-            plausibility_notes.append(f"⚠️ Renditeprognose ({ret_3y_net:.1f}% p.a.) sehr hoch. Basiert stark auf Markt-Neubewertung ({revaluation_p_a_3y:.1f}% p.a. Multiplerise).")
-            
+            plausibility_notes.append(f"🟡 Renditeprognose überdurchschnittlich ({ret_3y_net:.1f}% p.a.) – teilweise abhängig von Fair-Value-Aufholung ({revaluation_p_a_3y:.1f}% p.a.).")
+
         if is_financial:
             if plausibility_status == "🟢 Modell plausibel":
                 plausibility_status = "🟡 Modell mit Vorsicht interpretieren"
@@ -152,6 +155,14 @@ def analyze_stock_full(symbol, shares_count=0.0, buy_price=0.0, total_portfolio_
         if fcf < 0 and not is_financial:
             plausibility_status = "🔴 Daten-/Modellwarnung"
             plausibility_notes.append("🚨 Operativer Free Cashflow ist negativ. Qualität & Fair Value sorgfältig prüfen.")
+
+        # 5. Signal-Urteil Tab A
+        if mos > 15 and quality_score >= 70:
+            signal_judgment = "🟢 ATTRAKTIV BEWERTET – Prüfung für Kauf sinnvoll"
+        elif mos > 0 and quality_score >= 50:
+            signal_judgment = "🟡 MODERAT BEWERTET – Beobachten / Halten"
+        else:
+            signal_judgment = "🔴 TEUER ODER SCHWACHE QUALITÄT – Kein Kauf"
 
         buy_limit = fv_base * 0.90
         weight_pct = (current_position_val / total_portfolio_val * 100) if total_portfolio_val > 0 else 0.0
@@ -188,6 +199,7 @@ def analyze_stock_full(symbol, shares_count=0.0, buy_price=0.0, total_portfolio_
             "Neubewertung_pa_3J": f"{revaluation_p_a_3y:.1f} % p.a.",
             "Plausibility_Status": plausibility_status,
             "Plausibility_Notes": plausibility_notes,
+            "Signal_Judgment": signal_judgment,
             "Gewicht": f"{weight_pct:.1f} %",
             "Freie Kap. (€)": f"{remaining_cap_eur:,.2f} €",
             "raw_cost_basis": cost_basis,
@@ -241,14 +253,16 @@ with tab_a:
             if res_a:
                 st.markdown(f"### {res_a['Name']} (`{res_a['Ticker']}`) – Sektor: {res_a['Sector']}")
                 
-                # PLAUSIBILITÄTS-CHECK ANZEIGE
+                # URTEIL & PLAUSIBILITÄTS-CHECK ANZEIGE
+                st.markdown(f"### Urteil: **{res_a['Signal_Judgment']}**")
+                
                 st.markdown("#### 🔍 Plausibilitäts-Check & Modell-Status")
                 if "🔴" in res_a["Plausibility_Status"]:
-                    st.error(f"### {res_a['Plausibility_Status']}")
+                    st.error(f"**{res_a['Plausibility_Status']}**")
                 elif "🟡" in res_a["Plausibility_Status"]:
-                    st.warning(f"### {res_a['Plausibility_Status']}")
+                    st.warning(f"**{res_a['Plausibility_Status']}**")
                 else:
-                    st.success(f"### {res_a['Plausibility_Status']}")
+                    st.success(f"**{res_a['Plausibility_Status']}**")
                     
                 for note in res_a["Plausibility_Notes"]:
                     st.markdown(f"- {note}")
@@ -379,9 +393,9 @@ with tab_c:
     
     sim_col1, sim_col2 = st.columns(2)
     with sim_col1:
-        sim_query = st.text_input("Simulierte Aktie (Name oder Ticker):", value="COCO", key="sim_q").strip()
+        sim_query = st.text_input("Simulierte Aktie (Name oder Ticker):", value="CS.PA", key="sim_q").strip()
     with sim_col2:
-        sim_amount = st.number_input("Simulierter Kaufwert (€):", min_value=100.0, value=1000.0, step=250.0)
+        sim_amount = st.number_input("Simulierter Kaufwert (€):", min_value=100.0, value=2500.0, step=250.0)
         
     if sim_query and sim_amount > 0:
         sim_ticker = search_ticker(sim_query)
@@ -452,7 +466,7 @@ with tab_c:
                 if "🟡" in sim_data["Plausibility_Status"]:
                     st.warning("### 🟡 KAUF MÖGLICH – MODELL MIT VORSICHT PRÜFEN")
                 else:
-                    st.success("### 🟢 KAUF PASST INS DEPOT")
+                    st.success("### 🟢 KAUF PASST OPTIMAL INS DEPOT")
             elif new_pos_weight > limit_pct_input or quote_after > target_stock_quote_max:
                 st.error("### 🔴 KAUF NICHT EMPFOHLEN (Limit-Überschreitung)")
             else:
