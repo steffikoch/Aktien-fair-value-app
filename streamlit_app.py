@@ -8,18 +8,14 @@ st.set_page_config(page_title="Aktien Fair-Value App", layout="wide")
 
 st.title("📊 Risiko & Fair-Value Analysator")
 
-# Tabs / Menü
 tab1, tab2 = st.tabs(["🔍 Einzelanalyse", "📋 Watchlist & Kauflimits"])
 
 with tab1:
     st.subheader("Aktie auswählen")
     
-    # Live-Suche / Ticker-Eingabe
     user_query = st.text_input("Gib Ticker oder Firmennamen ein:", placeholder="z. B. Luf, Toast, Coco, Apple...")
-    
     ticker_input = user_query.strip()
     
-    # Live-Suche ab 3 Buchstaben
     if len(user_query) >= 3:
         try:
             search_results = yf.Search(user_query, max_results=5).quotes
@@ -47,7 +43,6 @@ with tab1:
                 stock = yf.Ticker(ticker_input)
                 info = stock.info
                 
-                # Kurs & Währung
                 current_price = info.get("currentPrice") or info.get("regularMarketPrice")
                 currency = info.get("currency", "USD")
                 currency_symbol = "€" if currency == "EUR" else "$"
@@ -62,12 +57,12 @@ with tab1:
                     pe_ratio = info.get("trailingPE")
                     pb_ratio = info.get("priceToBook")
                     beta = info.get("beta")
-                    profit_margins = info.get("profitMargins")
+                    profit_margins = info.get("profitMargins", 0) or 0
                     ev_ebitda = info.get("enterpriseToEbitda")
                     dividend_yield = info.get("dividendYield", 0) or 0
                     earnings_growth = info.get("earningsGrowth", 0) or 0
                     
-                    # 1. Net Cash per Share Berechnen (Guthaben abzüglich Schulden)
+                    # 1. Net Cash per Share
                     total_cash = info.get("totalCash", 0) or 0
                     total_debt = info.get("totalDebt", 0) or 0
                     net_cash_per_share = 0.0
@@ -76,39 +71,50 @@ with tab1:
                         if net_cash > 0:
                             net_cash_per_share = net_cash / shares
 
-                    # 2. Dynamisches Ziel-KGV berechnen (Verbindung aus Wachstum & Standard)
-                    # Basis-KGV = 18, bei Wachstum Zuschlag bis max KGV 35
+                    # 2. Moderatere KGV-Staffelung (Bear: 25 / Base: 30 / Bull: 35)
                     growth_rate = max(0, earnings_growth * 100)
-                    target_pe = min(35.0, max(15.0, 15.0 + (growth_rate * 0.5)))
+                    target_pe_base = min(30.0, max(15.0, 15.0 + (growth_rate * 0.4)))
+                    target_pe_bear = max(12.0, target_pe_base * 0.80)
+                    target_pe_bull = min(38.0, target_pe_base * 1.20)
                     
                     # 3. Modelle Berechnen
-                    dcf_val = None
-                    kgv_val = None
-                    fcf_val = None
-                    
-                    # KGV-Modell (bevorzugt Forward-EPS falls vorhanden)
                     eval_eps = forward_eps if (forward_eps and forward_eps > 0) else eps
-                    if eval_eps and eval_eps > 0:
-                        kgv_val = (eval_eps * target_pe) + net_cash_per_share
-                        dcf_val = (eval_eps * (target_pe * 0.9)) + net_cash_per_share
                     
-                    # FCF-Modell
+                    dcf_val, kgv_val, fcf_val = None, None, None
+                    
+                    if eval_eps and eval_eps > 0:
+                        kgv_val = (eval_eps * target_pe_base) + net_cash_per_share
+                        dcf_val = (eval_eps * (target_pe_base * 0.9)) + net_cash_per_share
+                    
                     if fcf and shares and fcf > 0 and shares > 0:
                         fcf_per_share = fcf / shares
-                        fcf_val = (fcf_per_share * target_pe) + net_cash_per_share
+                        fcf_val = (fcf_per_share * target_pe_base) + net_cash_per_share
                     
-                    # Fair Values berechnen
-                    valid_models = [v for v in [dcf_val, kgv_val, fcf_val] if v is not None]
+                    # 4. Qualitätsgewichteter Fair Value
+                    weights = []
+                    vals = []
+                    if dcf_val:
+                        vals.append(dcf_val); weights.append(1.0)
+                    if kgv_val:
+                        vals.append(kgv_val); weights.append(1.0)
+                    if fcf_val:
+                        # Hohe FCF-Qualität wird stärker gewichtet
+                        fcf_weight = 1.5 if profit_margins > 0.10 else 1.0
+                        vals.append(fcf_val); weights.append(fcf_weight)
                     
-                    if valid_models:
-                        base_case = sum(valid_models) / len(valid_models)
-                        bear_case = base_case * 0.80  # Breitere Spanne für Realismus
-                        best_case = base_case * 1.20
+                    if vals:
+                        base_case = np.average(vals, weights=weights)
+                        
+                        # Bear und Bull mit gestaffelten KGVs/Szenarien
+                        bear_eps_val = (eval_eps * target_pe_bear) + net_cash_per_share if eval_eps else base_case * 0.8
+                        bull_eps_val = (eval_eps * target_pe_bull) + net_cash_per_share if eval_eps else base_case * 1.2
+                        
+                        bear_case = min(bear_eps_val, base_case * 0.85)
+                        best_case = max(bull_eps_val, base_case * 1.15)
+                        
                         margin_of_safety = ((base_case - current_price) / current_price) * 100
                     else:
-                        base_case = current_price
-                        bear_case = current_price
-                        best_case = current_price
+                        base_case, bear_case, best_case = current_price, current_price, current_price
                         margin_of_safety = 0.0
 
                     # Ergebnisse anzeigen
@@ -117,39 +123,38 @@ with tab1:
                     
                     col1, col2, col3 = st.columns(3)
                     col1.metric("Aktueller Kurs", f"{current_price:.2f} {currency_symbol}")
-                    col2.metric("Base-Case Fair Value", f"{base_case:.2f} {currency_symbol}" if valid_models else "N/A")
-                    col3.metric("Sicherheitspuffer", f"{margin_of_safety:.1f} %" if valid_models else "0.0 %")
+                    col2.metric("Qualitätsbereinigter Fair Value", f"{base_case:.2f} {currency_symbol}" if vals else "N/A")
+                    col3.metric("Sicherheitspuffer", f"{margin_of_safety:.1f} %" if vals else "0.0 %")
                     
-                    # Urteil mit angepassten Schwellenwerten
-                    if not valid_models:
-                        urteil = "NEUTRAL / UNRENTABEL"
-                        st.info(f"Urteil: **{urteil}** (Keine ausreichenden Gewinne/FCF für Fair-Value-Berechnung)")
+                    # 5. Neue feingliedrige Ampel-Logik
+                    if not vals:
+                        st.info("Urteil: **NEUTRAL / UNRENTABEL** (Keine ausreichenden Gewinne/FCF vorhanden)")
+                    elif margin_of_safety >= 30:
+                        st.success(f"Urteil: 🟢 **STARK KAUFEN** (Sehr hoher Sicherheitspuffer)")
                     elif margin_of_safety >= 15:
-                        urteil = "KAUFEN"
-                        st.success(f"Urteil: 🟢 **{urteil}**")
-                    elif margin_of_safety >= -20:
-                        urteil = "HALTEN"
-                        st.warning(f"Urteil: 🟡 **{urteil}**")
+                        st.success(f"Urteil: 🟢 **KAUFEN** (Guter Sicherheitspuffer)")
+                    elif margin_of_safety >= 5:
+                        st.warning(f"Urteil: 🟡 **HALTEN / KLEINE POSITION** (Moderat bewertet)")
+                    elif margin_of_safety >= -15:
+                        st.warning(f"Urteil: 🟠 **ABWARTEN** (Leicht überbewertet)")
                     else:
-                        urteil = "VERKAUFEN"
-                        st.error(f"Urteil: 🔴 **{urteil}**")
+                        st.error(f"Urteil: 🔴 **VERKAUFEN** (Stark überbewertet)")
 
-                    # Zusatzinfo Net Cash
                     if net_cash_per_share > 0:
                         st.caption(f"💡 Enthält einen Net-Cash-Bonus von +{net_cash_per_share:.2f} {currency_symbol} je Aktie.")
 
                     # Szenarien
                     st.subheader("Szenarien")
                     sc1, sc2, sc3 = st.columns(3)
-                    sc1.metric("Bear-Case (Konservativ)", f"{bear_case:.2f} {currency_symbol}" if valid_models else "N/A")
-                    sc2.metric("Base-Case (Realistisch)", f"{base_case:.2f} {currency_symbol}" if valid_models else "N/A")
-                    sc3.metric("Best-Case (Optimistisch)", f"{best_case:.2f} {currency_symbol}" if valid_models else "N/A")
+                    sc1.metric("Bear-Case (Konservativ)", f"{bear_case:.2f} {currency_symbol}" if vals else "N/A")
+                    sc2.metric("Base-Case (Realistisch)", f"{base_case:.2f} {currency_symbol}" if vals else "N/A")
+                    sc3.metric("Best-Case (Optimistisch)", f"{best_case:.2f} {currency_symbol}" if vals else "N/A")
 
                     # Einzelne Modelle Detail
                     st.subheader("Modell-Details")
                     st.write(f"- **DCF/Gewinn-Modell:** {f'{dcf_val:.2f} {currency_symbol}' if dcf_val else 'N/A'}")
-                    st.write(f"- **KGV-Modell (Ziel-KGV {target_pe:.1f}):** {f'{kgv_val:.2f} {currency_symbol}' if kgv_val else 'N/A'}")
-                    st.write(f"- **FCF-Modell:** {f'{fcf_val:.2f} {currency_symbol}' if fcf_val else 'N/A'}")
+                    st.write(f"- **KGV-Modell (Ziel-KGV {target_pe_base:.1f}):** {f'{kgv_val:.2f} {currency_symbol}' if kgv_val else 'N/A'}")
+                    st.write(f"- **FCF-Modell (Höher gewichtet bei Marge > 10%):** {f'{fcf_val:.2f} {currency_symbol}' if fcf_val else 'N/A'}")
 
                     # Risikocheck & Qualität
                     st.subheader("📊 Risikocheck & Qualität")
