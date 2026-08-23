@@ -71,13 +71,13 @@ with tab1:
                         if net_cash > 0:
                             net_cash_per_share = net_cash / shares
 
-                    # 2. Reines Unternehmensmodelling (Ziel-KGVs)
+                    # 2. Fundamentale Ziel-KGVs & Entkoppelte Szenario-Annahmen
                     growth_rate = max(0, earnings_growth * 100)
                     target_pe_base = min(30.0, max(15.0, 15.0 + (growth_rate * 0.4)))
-                    target_pe_bear = max(12.0, target_pe_base * 0.75)  # Rein fundamentaler Bear-Case
+                    target_pe_bear = max(12.0, target_pe_base * 0.75)
                     target_pe_bull = min(38.0, target_pe_base * 1.25)
                     
-                    # 3. Modelle Berechnen
+                    # 3. Modelle Berechnen (Base Case)
                     eval_eps = forward_eps if (forward_eps and forward_eps > 0) else eps
                     
                     dcf_val, kgv_val, fcf_val = None, None, None
@@ -90,7 +90,7 @@ with tab1:
                         fcf_per_share = fcf / shares
                         fcf_val = (fcf_per_share * target_pe_base) + net_cash_per_share
                     
-                    # 4. Qualitätsgewichteter Fair Value
+                    # 4. Qualitätsgewichteter Fair Value (Base Case)
                     weights = []
                     vals = []
                     if dcf_val:
@@ -104,23 +104,27 @@ with tab1:
                     if vals:
                         base_case = np.average(vals, weights=weights)
                         
-                        # Bear und Bull rein fundamental (ohne Koppelung an Kauflimits)
-                        bear_case = (eval_eps * target_pe_bear) + net_cash_per_share if eval_eps else base_case * 0.80
-                        best_case = (eval_eps * target_pe_bull) + net_cash_per_share if eval_eps else base_case * 1.25
+                        # Dynamische fundamentale Szenarien
+                        if eval_eps and eval_eps > 0:
+                            bear_case = ((eval_eps * 0.85) * target_pe_bear) + net_cash_per_share
+                            best_case = ((eval_eps * 1.15) * target_pe_bull) + net_cash_per_share
+                        else:
+                            bear_case = base_case * 0.75
+                            best_case = base_case * 1.35
                         
                         margin_of_safety = ((base_case - current_price) / current_price) * 100
                     else:
                         base_case, bear_case, best_case = current_price, current_price, current_price
                         margin_of_safety = 0.0
 
-                    # 5. Fair-Value Quality Score (0 - 100 Punkte)
+                    # 5. Quality Score (Entkoppelt von der Bewertung)
                     score_growth = min(20, max(0, int(growth_rate * 0.8)))
                     score_margin = min(20, max(0, int(profit_margins * 100 * 1.2)))
                     score_cash = 20 if net_cash_per_share > 0 else 5
-                    score_valuation = min(20, max(0, int(10 + margin_of_safety * 0.4)))
+                    score_balance = 20 if (ev_ebitda and ev_ebitda < 20) else 10
                     score_risk = 20 if (beta and beta < 1.0) else (10 if beta and beta < 1.5 else 5)
                     
-                    total_score = min(100, score_growth + score_margin + score_cash + score_valuation + score_risk)
+                    quality_score = min(100, score_growth + score_margin + score_cash + score_balance + score_risk)
 
                     # Ergebnisse anzeigen
                     st.markdown("---")
@@ -130,21 +134,22 @@ with tab1:
                     col1.metric("Aktueller Kurs", f"{current_price:.2f} {currency_symbol}")
                     col2.metric("Qualitäts-Fair-Value", f"{base_case:.2f} {currency_symbol}" if vals else "N/A")
                     col3.metric("Sicherheitspuffer", f"{margin_of_safety:.1f} %" if vals else "0.0 %")
-                    col4.metric("Quality-Score", f"{total_score} / 100 Points")
+                    col4.metric("Quality Score", f"{quality_score} / 100 Pkt.")
 
-                    # Ampel-Urteil
+                    # Urteils-Matrix (Kombination aus Qualität & Preis)
+                    st.subheader("📢 Gesamturteil")
                     if not vals:
                         st.info("Urteil: **NEUTRAL / UNRENTABEL** (Keine ausreichenden Gewinne/FCF vorhanden)")
                     elif margin_of_safety > 30:
-                        st.success(f"Urteil: 🟢 **STARKER KAUF** (Sicherheitspuffer > 30%)")
+                        st.success(f"🟢 **STARKER KAUF** | Hohe Sicherheitsmarge ({margin_of_safety:.1f}%) & Quality Score {quality_score}/100")
                     elif margin_of_safety >= 20:
-                        st.success(f"Urteil: 🟢 **KAUFEN** (Sicherheitspuffer 20–30%)")
+                        st.success(f"🟢 **KAUFEN** | Guter Sicherheitspuffer ({margin_of_safety:.1f}%) & Quality Score {quality_score}/100")
                     elif margin_of_safety >= 10:
-                        st.warning(f"Urteil: 🟡 **BEOBACHTEN** (Sicherheitspuffer 10–20%)")
+                        st.warning(f"🟡 **BEOBACHTEN** | Moderater Sicherheitspuffer ({margin_of_safety:.1f}%)")
                     elif margin_of_safety >= 0:
-                        st.warning(f"Urteil: 🟠 **ABWARTEN** (Sicherheitspuffer 0–10%)")
+                        st.warning(f"🟠 **ABWARTEN** | Fair bewertet (+{margin_of_safety:.1f}% Puffer). Erst bei Abgaben einsteigen.")
                     else:
-                        st.error(f"Urteil: 🔴 **VERKAUFEN** (Sicherheitspuffer < 0%)")
+                        st.error(f"🔴 **VERKAUFEN / ÜBERBEWERTET** | Kurs liegt {abs(margin_of_safety):.1f}% über dem Fair Value.")
 
                     if net_cash_per_share > 0:
                         st.caption(f"💡 Enthält einen Net-Cash-Bonus von +{net_cash_per_share:.2f} {currency_symbol} je Aktie.")
@@ -161,7 +166,7 @@ with tab1:
                         cr2.metric("Fair Value Upside", f"{upside_base:+.1f} %")
                         cr3.metric("Bull-Case Upside", f"{upside_bull:+.1f} %")
 
-                    # Kauflimit-Rechner (Entkoppelt von Bear-Case)
+                    # Kauflimit-Rechner
                     if vals:
                         st.subheader("🎯 Kauflimit-Rechner (Staffeln aus Fair Value)")
                         limit_10 = base_case * 0.90
@@ -184,7 +189,7 @@ with tab1:
                         st.table(limits_df)
 
                     # Szenarien Details
-                    st.subheader("📌 Unternehmens-Szenarien")
+                    st.subheader("📌 Fundamentale Szenarien")
                     sc1, sc2, sc3 = st.columns(3)
                     sc1.metric("Bear-Case (Konservativ)", f"{bear_case:.2f} {currency_symbol}")
                     sc2.metric("Base-Case (Realistisch)", f"{base_case:.2f} {currency_symbol}")
