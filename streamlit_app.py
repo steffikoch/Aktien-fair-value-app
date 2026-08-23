@@ -402,15 +402,14 @@ with tab_c:
             total_stock_val_before = sum([item["raw_current_val"] for item in portfolio_analyzed])
             existing_pos_val = 0.0
             existing_sector_val = 0.0
-            sector_holdings = [] # Liste mit (Ticker, Wert, Gewicht_am_Gesamtdepot)
+            existing_sector_tickers = []
             
             for item in portfolio_analyzed:
                 if item["Ticker"] == sim_data["Ticker"]:
                     existing_pos_val = item["raw_current_val"]
                 if item["Sector"] == sim_data["Sector"]:
                     existing_sector_val += item["raw_current_val"]
-                    stock_weight = (item["raw_current_val"] / depot_val_input) * 100
-                    sector_holdings.append(f"{item['Ticker']} ({stock_weight:.1f} %)")
+                    existing_sector_tickers.append(item["Ticker"])
 
             # 2. Exakte Berechnung VORHER ➔ NACHHER
             quote_before = (total_stock_val_before / depot_val_input) * 100
@@ -424,7 +423,7 @@ with tab_c:
             new_sector_val = existing_sector_val + sim_amount
             new_sector_weight = (new_sector_val / depot_val_input) * 100
             
-            # Sektoranteil AM REINEN AKTIENPORTFOLIO (Konzentrations-Score)
+            # Sektoranteil AM REINEN AKTIENPORTFOLIO
             sector_share_of_equities_after = (new_sector_val / total_stock_val_after * 100) if total_stock_val_after > 0 else 0.0
             
             # Freie Spielräume
@@ -444,7 +443,7 @@ with tab_c:
             s1, s2, s3, s4 = st.columns(4)
             s1.metric("Gesamte Aktienquote", f"{quote_before:.1f} % ➔ {quote_after:.1f} %", delta=f"Ziel: {target_stock_quote_max}%")
             s2.metric("Positionsgewicht", f"{new_pos_weight:.1f} %", delta=f"Max: {limit_pct_input:.1f}%")
-            s3.metric(f"Sektor ({sim_data['Sector']})", f"{sector_weight_before:.1f} % ➔ {new_sector_weight:.1f} %", delta=f"Max: {sector_limit_pct_input:.1f}%")
+            s3.metric(f"Sektor am Gesamtdepot", f"{sector_weight_before:.1f} % ➔ {new_sector_weight:.1f} %", delta=f"Max: {sector_limit_pct_input:.1f}%")
             s4.metric("Verbl. Quoten-Spielraum", f"{spielraum_quote_after:,.2f} €")
 
             st.divider()
@@ -471,17 +470,32 @@ with tab_c:
             check_quote = f"{c_quote} **4. Gesamte Aktienquote:** {quote_after:.1f} % (Max: {target_stock_quote_max:.1f} % | Spielraum: {spielraum_quote_after:,.2f} €)"
             if quote_after > target_stock_quote_max: fit_ok = False
 
-            # 5. Sektorgewicht (am Gesamtdepot)
+            # 5. Sektorgewicht am Gesamtdepot
             c_sec = "🟢" if new_sector_weight <= sector_limit_pct_input else "🔴"
-            check_sec = f"{c_sec} **5. Sektorgewicht ({sim_data['Sector']}):** {new_sector_weight:.1f} % (Limit: {sector_limit_pct_input:.1f} % | Spielraum: {spielraum_sector_after:,.2f} €)"
+            check_sec = f"{c_sec} **5. Sektorgewicht (am Gesamtdepot):** {new_sector_weight:.1f} % (Limit: {sector_limit_pct_input:.1f} % | Spielraum: {spielraum_sector_after:,.2f} €)"
             if new_sector_weight > sector_limit_pct_input: fit_ok = False
 
-            # 6. Sektor-Konzentration (am Aktien-Portfolio)
-            c_sim = "🟢" if sector_share_of_equities_after <= 50.0 else "🟡"
-            if sector_holdings:
-                check_sim = f"{c_sim} **6. Sektor-Konzentration:** Vorhanden: {', '.join(sector_holdings)}. Sektor macht **{sector_share_of_equities_after:.1f} %** deines Aktienportfolios aus."
+            # 6. Sektor-Konzentration (DOPPELTE BETRACHTUNG)
+            if sector_share_of_equities_after > 60.0:
+                c_conc = "🔴"
+                rating_str = "Hohe Konzentration innerhalb des Aktienanteils"
+            elif sector_share_of_equities_after > 35.0:
+                c_conc = "🟡"
+                rating_str = "Moderate Konzentration innerhalb des Aktienanteils"
             else:
-                check_sim = f"🟢 **6. Sektor-Konzentration:** Keine weiteren Werte im Sektor '{sim_data['Sector']}' im Depot."
+                c_conc = "🟢"
+                rating_str = "Gute Streuung innerhalb des Aktienanteils"
+
+            holdings_before_str = ", ".join(existing_sector_tickers) if existing_sector_tickers else "Keine"
+            all_holdings = list(set(existing_sector_tickers + [sim_data['Ticker']]))
+            holdings_after_str = " + ".join(all_holdings)
+
+            check_sim = f"""{c_conc} **6. Sektor-Konzentration ({sim_data['Sector']}):**
+- **Anteil am Gesamtdepot:** {new_sector_weight:.1f} % (Limit: {sector_limit_pct_input:.1f} %)
+- **Anteil am Aktienportfolio:** {sector_share_of_equities_after:.1f} %
+- **Bestehende Positionen:** {holdings_before_str}
+- **Nach Kauf:** {holdings_after_str}
+- **Bewertung:** {c_conc} {rating_str}"""
 
             # 7. Erwartete Rendite
             c_ret = "🟢" if sim_data["raw_ret_3y"] >= 8.0 else "🟡"
