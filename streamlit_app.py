@@ -4,11 +4,11 @@ import pandas as pd
 import numpy as np
 
 # Page Config
-st.set_page_config(page_title="Aktien Fair-Value App", layout="wide")
+st.set_page_config(page_title="Aktien Fair-Value & Depot App", layout="wide")
 
-st.title("📊 Risiko & Fair-Value Analysator")
+st.title("📊 Risiko, Fair-Value & Depot Analysator")
 
-tab1, tab2 = st.tabs(["🔍 Einzelanalyse", "📋 Watchlist & Kauflimits"])
+tab1, tab2, tab3 = st.tabs(["🔍 Einzelanalyse", "📋 Watchlist & Kauflimits", "💼 Depot-Abgleich"])
 
 # ==========================================
 # TAB 1: EINZELANALYSE
@@ -140,7 +140,17 @@ with tab1:
                     
                     col1, col2, col3, col4 = st.columns(4)
                     col1.metric("Aktueller Kurs", f"{current_price:.2f} {currency_symbol}")
-                    col2.metric("Qualitäts-Fair-Value", f"{base_case:.2f} {currency_symbol}" if vals else "N/A")
+                    
+                    if vals and kgv_val and kgv_val > 0:
+                        safety_discount_pct = ((kgv_val - base_case) / kgv_val) * 100
+                        col2.metric(
+                            "Qualitäts-Fair-Value", 
+                            f"{base_case:.2f} {currency_symbol}",
+                            help=f"Inkl. ca. {safety_discount_pct:.1f}% Sicherheitsabschlag gegenüber dem reinen KGV-Wert ({kgv_val:.2f} {currency_symbol}) durch Einbezug von DCF & FCF."
+                        )
+                    else:
+                        col2.metric("Qualitäts-Fair-Value", f"{base_case:.2f} {currency_symbol}" if vals else "N/A")
+                        
                     col3.metric("Sicherheitspuffer", f"{margin_of_safety:.1f} %" if vals else "0.0 %")
                     col4.metric("Quality Score", f"{quality_score} / 100 Pkt.")
 
@@ -246,7 +256,7 @@ with tab1:
                         kgv_base_pure = (eval_eps * target_pe_base) + net_cash_per_share
                         
                         drivers_df = pd.DataFrame({
-                            "Szenario": ["Bear-Case", "Reines KGV-Modell", "Qualitäts-Base-Case (Ziel)", "Bull-Case"],
+                            "Szenario": ["Bear-Case", "Reines KGV-Modell", "Qualitäts-Base-Case (Ziel, inkl. Sicherheitsabschlag)", "Bull-Case"],
                             f"EPS-Annahme ({currency_symbol})": [f"{bear_eps:.2f}", f"{eval_eps:.2f}", f"{eval_eps:.2f}", f"{bull_eps:.2f}"],
                             "Ziel-KGV": [f"{target_pe_bear:.1f}x", f"{target_pe_base:.1f}x", f"{target_pe_base:.1f}x (Gewichtet)", f"{target_pe_bull:.1f}x"],
                             f"Net Cash / Aktie": [f"+{net_cash_per_share:.2f} {currency_symbol}"] * 4,
@@ -376,3 +386,141 @@ with tab2:
             )
         else:
             st.warning("Keine Daten für die angegebenen Ticker gefunden.")
+
+# ==========================================
+# TAB 3: DEPOT-ABGLEICH (CA. 15 AKTIEN)
+# ==========================================
+with tab3:
+    st.subheader("💼 Portfolio-Abgleich mit deinen Kaufkursen & Kauflimits")
+    st.write("Verwalte dein Depot (~15 Aktien) und vergleiche deine Kaufkurse direkt mit dem aktuellen Fair Value und den Nachkauflimits.")
+
+    # Beispiel-Standard-Depot
+    default_portfolio = pd.DataFrame([
+        {"Ticker": "COCO", "Kaufkurs": 54.50, "Stueckzahl": 50},
+        {"Ticker": "AAPL", "Kaufkurs": 175.00, "Stueckzahl": 20},
+        {"Ticker": "MSFT", "Kaufkurs": 380.00, "Stueckzahl": 10},
+        {"Ticker": "TOST", "Kaufkurs": 22.00, "Stueckzahl": 100}
+    ])
+
+    uploaded_file = st.file_content = st.file_uploader("📥 Eigenes Depot hochladen (CSV)", type=["csv"])
+    if uploaded_file is not None:
+        try:
+            portfolio_df = pd.read_csv(uploaded_file)
+            st.success("Depot erfolgreich geladen!")
+        except Exception:
+            st.error("Fehler beim Lesen der CSV. Bitte Format prüfen (Spalten: Ticker, Kaufkurs, Stueckzahl).")
+            portfolio_df = default_portfolio
+    else:
+        portfolio_df = default_portfolio
+
+    st.markdown("#### ✏️ Depot bearbeiten")
+    edited_portfolio = st.data_editor(
+        portfolio_df, 
+        num_rows="dynamic",
+        use_container_width=True,
+        column_config={
+            "Ticker": st.column_config.TextColumn("Ticker (z. B. COCO)"),
+            "Kaufkurs": st.column_config.NumberColumn("Kaufkurs", format="%.2f"),
+            "Stueckzahl": st.column_config.NumberColumn("Stückzahl", format="%d")
+        }
+    )
+
+    calc_portfolio_btn = st.button("Depot jetzt analysieren", type="primary")
+
+    if calc_portfolio_btn and not edited_portfolio.empty:
+        port_results = []
+        with st.spinner("Lade Live-Daten für dein Depot..."):
+            for idx, row in edited_portfolio.iterrows():
+                t = str(row.get("Ticker", "")).strip().upper()
+                buy_price = float(row.get("Kaufkurs", 0) or 0)
+                qty = int(row.get("Stueckzahl", 0) or 0)
+                
+                if not t:
+                    continue
+                
+                try:
+                    s = yf.Ticker(t)
+                    i = s.info
+                    price = i.get("currentPrice") or i.get("regularMarketPrice")
+                    if not price or np.isnan(price):
+                        continue
+                    
+                    curr = i.get("currency", "USD")
+                    curr_sym = "€" if curr == "EUR" else "$"
+                    eps = i.get("forwardEps") or i.get("trailingEps")
+                    fcf = i.get("freeCashflow")
+                    shares = i.get("sharesOutstanding")
+                    growth = max(0, (i.get("earningsGrowth", 0) or 0) * 100)
+                    margins = i.get("profitMargins", 0) or 0
+                    
+                    # Net Cash
+                    total_cash = i.get("totalCash", 0) or 0
+                    total_debt = i.get("totalDebt", 0) or 0
+                    net_cash_ps = 0.0
+                    if shares and shares > 0 and (total_cash - total_debt) > 0:
+                        net_cash_ps = (total_cash - total_debt) / shares
+                    
+                    # Fair Value Modell
+                    target_pe = min(30.0, max(15.0, 15.0 + (growth * 0.4)))
+                    vals = []
+                    if eps and eps > 0:
+                        vals.append((eps * target_pe) + net_cash_ps)
+                    if fcf and shares and fcf > 0 and shares > 0:
+                        vals.append(((fcf / shares) * target_pe) + net_cash_ps)
+                    
+                    if vals:
+                        fv = np.mean(vals)
+                        limit_15 = fv * 0.85
+                        limit_25 = fv * 0.75
+                    else:
+                        fv, limit_15, limit_25 = price, price, price
+
+                    # Quality Score
+                    score = min(100, int(growth * 0.8) + int(margins * 120) + (20 if net_cash_ps > 0 else 5) + 20)
+
+                    # Performance
+                    perf_pct = ((price - buy_price) / buy_price) * 100 if buy_price > 0 else 0.0
+                    position_value = price * qty
+                    
+                    # Handlungssignal
+                    if score < 70:
+                        action = "🔴 Schwache Qualität (Score <70) -> Halten / Aussteigen prüfen"
+                    elif price <= limit_25:
+                        action = "🟢 **STARKES NACHKAUFLIMIT REACHED (25%)**"
+                    elif price <= limit_15:
+                        action = "🟢 **1. NACHKAUFLIMIT REACHED (15%)**"
+                    elif perf_pct > 50 and price > (fv * 1.2):
+                        action = "🟠 Stark gelaufen (>20% über Fair Value) -> Gewinne sichern?"
+                    else:
+                        action = "⚪ Halten (Kein Nachkaufsignal)"
+
+                    port_results.append({
+                        "Ticker": t,
+                        "Stück": qty,
+                        f"Kaufkurs ({curr_sym})": round(buy_price, 2),
+                        f"Akt. Kurs ({curr_sym})": round(price, 2),
+                        "Performance (%)": f"{perf_pct:+.1f} %",
+                        f"Wert ({curr_sym})": round(position_value, 2),
+                        f"Fair Value ({curr_sym})": round(fv, 2),
+                        "Quality": f"{score}/100",
+                        f"Nachkauf-Limit (15%) ({curr_sym})": round(limit_15, 2),
+                        "Handlungssignal": action
+                    })
+                except Exception:
+                    pass
+
+        if port_results:
+            df_port_res = pd.DataFrame(port_results)
+            st.markdown("### 📊 Auswertung deines Portfolios")
+            st.table(df_port_res)
+            
+            # Export des Portfolios
+            csv_port = edited_portfolio.to_csv(index=False).encode('utf-8')
+            st.download_button(
+                label="📥 Depot-Konfiguration als CSV speichern",
+                data=csv_port,
+                file_name="mein_depot_aktien.csv",
+                mime="text/csv"
+            )
+        else:
+            st.warning("Keine Live-Daten für dein Portfolio gefunden.")
