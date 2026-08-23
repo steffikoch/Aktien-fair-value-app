@@ -9,15 +9,14 @@ st.set_page_config(page_title="Portfolio & Valuation Engine", layout="wide")
 st.title("📈 Stock Valuation & Portfolio Capacity Engine")
 
 # =========================================================
-# MOCK DATASETS & HELPERS
+# INITIAL MOCK DATASETS
 # =========================================================
-@st.cache_data
-def load_mock_portfolio():
+def get_initial_portfolio():
     return pd.DataFrame([
-        {"Ticker": "AAPL", "Name": "Apple Inc.", "Sector": "Technology", "Shares": 15, "Price_EUR": 210.00},
-        {"Ticker": "MSFT", "Name": "Microsoft Corp.", "Sector": "Technology", "Shares": 8, "Price_EUR": 415.00},
-        {"Ticker": "ALV.DE", "Name": "Allianz SE", "Sector": "Financial Services", "Shares": 20, "Price_EUR": 260.00},
-        {"Ticker": "NOVN.SW", "Name": "Novartis AG", "Sector": "Healthcare", "Shares": 30, "Price_EUR": 92.00},
+        {"Ticker": "AAPL", "Name": "Apple Inc.", "Sector": "Technology", "Shares": 15.0, "Price_EUR": 210.00},
+        {"Ticker": "MSFT", "Name": "Microsoft Corp.", "Sector": "Technology", "Shares": 8.0, "Price_EUR": 415.00},
+        {"Ticker": "ALV.DE", "Name": "Allianz SE", "Sector": "Financial Services", "Shares": 20.0, "Price_EUR": 260.00},
+        {"Ticker": "NOVN.SW", "Name": "Novartis AG", "Sector": "Healthcare", "Shares": 30.0, "Price_EUR": 92.00},
     ])
 
 @st.cache_data
@@ -40,12 +39,11 @@ def load_mock_universe():
         }
     ])
 
-df_portfolio = load_mock_portfolio()
-df_universe = load_mock_universe()
+# Session State für interaktives Portfolio initialisieren
+if "portfolio_data" not in st.session_state:
+    st.session_state.portfolio_data = get_initial_portfolio()
 
-# Calculate Portfolio Metrics
-df_portfolio["Position_Value"] = df_portfolio["Shares"] * df_portfolio["Price_EUR"]
-total_stock_value = df_portfolio["Position_Value"].sum()
+df_universe = load_mock_universe()
 
 # =========================================================
 # SIDEBAR CONFIGURATION
@@ -57,12 +55,10 @@ target_stock_quote_max = st.sidebar.slider("Max. Ziel-Aktienquote (%)", 10.0, 10
 limit_pct_input = st.sidebar.slider("Max. Einzelposition (% vom Depot)", 1.0, 20.0, 5.0)
 sector_limit_pct_input = st.sidebar.slider("Max. Sektor-Limit (% vom Gesamtdepot)", 5.0, 50.0, 25.0)
 
-total_portfolio_value = total_stock_value + cash_balance
-
 # =========================================================
 # NAVIGATION TABS
 # =========================================================
-tab_a, tab_b, tab_c = st.tabs(["🔍 Tab A: Aktien-Analyse", "📊 Tab B: Depot-Übersicht", "🎯 Tab C: Kauf-Simulation & Tranchen"])
+tab_a, tab_b, tab_c = st.tabs(["🔍 Tab A: Aktien-Analyse", "📊 Tab B: Depot-Verwaltung", "🎯 Tab C: Kauf-Simulation & Tranchen"])
 
 # ---------------------------------------------------------
 # TAB A: AKTIEN-ANALYSE
@@ -83,18 +79,43 @@ with tab_a:
     st.info(f"**Modell-Status:** {stock_data['Plausibility_Status']}")
 
 # ---------------------------------------------------------
-# TAB B: DEPOT-ÜBERSICHT
+# TAB B: DEPOT-VERWALTUNG (INTERAKTIVER EDITOR)
 # ---------------------------------------------------------
 with tab_b:
-    st.header("Aktueller Depot-Status")
+    st.header("Aktueller Depot-Status & Verwaltung")
+    st.caption("Füge neue Aktien hinzu, ändere Stückzahlen/Kurse oder lösche verkaufte Positionen direkt in der Tabelle.")
     
+    # Interaktiver Data Editor
+    edited_df = st.data_editor(
+        st.session_state.portfolio_data,
+        num_rows="dynamic",
+        use_container_width=True,
+        key="portfolio_editor",
+        column_config={
+            "Shares": st.column_config.NumberColumn("Stückzahl", min_value=0, step=1),
+            "Price_EUR": st.column_config.NumberColumn("Kurs (€)", min_value=0.0, format="%.2f €"),
+        }
+    )
+
+    # Aktualisierte Daten im Session State speichern
+    st.session_state.portfolio_data = edited_df
+
+    # Live-Berechnung des Aktienwerts
+    df_portfolio = edited_df.copy()
+    if not df_portfolio.empty and "Shares" in df_portfolio.columns and "Price_EUR" in df_portfolio.columns:
+        df_portfolio["Position_Value"] = df_portfolio["Shares"].fillna(0) * df_portfolio["Price_EUR"].fillna(0)
+        total_stock_value = df_portfolio["Position_Value"].sum()
+    else:
+        df_portfolio["Position_Value"] = 0.0
+        total_stock_value = 0.0
+
+    total_portfolio_value = total_stock_value + cash_balance
+
+    st.divider()
     m1, m2, m3 = st.columns(3)
     m1.metric("Gesamtdepotwert", f"{total_portfolio_value:,.2f} €")
     m2.metric("Aktienwert", f"{total_stock_value:,.2f} €")
-    m3.metric("Aktienquote", f"{(total_stock_value / total_portfolio_value) * 100:.1f} %")
-    
-    st.subheader("Bestehende Positionen")
-    st.dataframe(df_portfolio[["Ticker", "Name", "Sector", "Shares", "Price_EUR", "Position_Value"]], use_container_width=True)
+    m3.metric("Aktienquote", f"{(total_stock_value / total_portfolio_value * 100) if total_portfolio_value > 0 else 0:.1f} %")
 
 # ---------------------------------------------------------
 # TAB C: KAUF-SIMULATION & TRANCHEN-STEUERUNG
@@ -108,26 +129,30 @@ with tab_c:
     sim_data = df_universe[df_universe["Ticker"] == sim_ticker].iloc[0].to_dict()
     sim_data["raw_mos"] = ((sim_data["Fair_Value"] - sim_data["Current_Price"]) / sim_data["Current_Price"]) * 100
     
-    # Existing allocations
-    existing_pos_val = df_portfolio[df_portfolio["Ticker"] == sim_ticker]["Position_Value"].sum()
-    existing_sector_val = df_portfolio[df_portfolio["Sector"] == sim_data["Sector"]]["Position_Value"].sum()
-    
-    # After simulation calculations
+    # Bereits existierende Allokationen ermitteln
+    if not df_portfolio.empty and "Ticker" in df_portfolio.columns and "Sector" in df_portfolio.columns:
+        existing_pos_val = df_portfolio[df_portfolio["Ticker"] == sim_ticker]["Position_Value"].sum()
+        existing_sector_val = df_portfolio[df_portfolio["Sector"] == sim_data["Sector"]]["Position_Value"].sum()
+    else:
+        existing_pos_val = 0.0
+        existing_sector_val = 0.0
+
+    # Werte nach der Simulation
     new_total_portfolio = total_portfolio_value + sim_amount
     new_total_stock = total_stock_value + sim_amount
     new_pos_val = existing_pos_val + sim_amount
     new_sector_val = existing_sector_val + sim_amount
     
-    quote_before = (total_stock_value / total_portfolio_value) * 100
-    quote_after = (new_total_stock / new_total_portfolio) * 100
-    new_pos_weight = (new_pos_val / new_total_portfolio) * 100
-    sector_weight_before = (existing_sector_val / total_portfolio_value) * 100
-    new_sector_weight = (new_sector_val / new_total_portfolio) * 100
+    quote_before = (total_stock_value / total_portfolio_value * 100) if total_portfolio_value > 0 else 0
+    quote_after = (new_total_stock / new_total_portfolio * 100) if new_total_portfolio > 0 else 0
+    new_pos_weight = (new_pos_val / new_total_portfolio * 100) if new_total_portfolio > 0 else 0
+    sector_weight_before = (existing_sector_val / total_portfolio_value * 100) if total_portfolio_value > 0 else 0
+    new_sector_weight = (new_sector_val / new_total_portfolio * 100) if new_total_portfolio > 0 else 0
     
-    # Core Metric: Sector share within equities only
-    sector_share_equities_after = (new_sector_val / new_total_stock) * 100
+    # Sektor-Anteil nur am Aktienportfolio
+    sector_share_equities_after = (new_sector_val / new_total_stock * 100) if new_total_stock > 0 else 0
     
-    # Hard Limits calculations (in EUR based on total portfolio value)
+    # Hard Limits (in EUR)
     max_pos_eur = total_portfolio_value * (limit_pct_input / 100.0)
     max_sector_eur = total_portfolio_value * (sector_limit_pct_input / 100.0)
     max_target_eur = total_portfolio_value * (target_stock_quote_max / 100.0)
@@ -139,7 +164,7 @@ with tab_c:
     )
 
     # =========================================================
-    # VERFEINERTE 4-STUFEN KONZENTRATIONSLOGIK (AKTIENPORTFOLIO)
+    # 4-STUFEN KONZENTRATIONSLOGIK (AKTIENPORTFOLIO)
     # =========================================================
     raw_hard_limit_space = min(
         max_pos_eur - existing_pos_val,
@@ -162,7 +187,7 @@ with tab_c:
         )
 
     elif sec_share >= 40.0:
-        # STUFE 3: 40 - 50% -> GEDROSSELTE ERST-TRANCHE (z.B. AXA mit 40,2 %)
+        # STUFE 3: 40 - 50% -> GEDROSSELTE ERST-TRANCHE
         max_recommended_buy = min(1000.0, raw_hard_limit_space)
         is_drossel_active = True
         tranche_status = "🟠 GEDROSSELTE TRANCHE"
@@ -174,7 +199,7 @@ with tab_c:
         )
 
     elif sec_share >= 30.0:
-        # STUFE 2: 30 - 40% -> NORMALE ERST-TRANCHE MIT HINWEIS
+        # STUFE 2: 30 - 40% -> NORMALE ERST-TRANCHE
         max_recommended_buy = min(1500.0, raw_hard_limit_space)
         is_drossel_active = True
         tranche_status = "🟡 ERST-TRANCHE"
