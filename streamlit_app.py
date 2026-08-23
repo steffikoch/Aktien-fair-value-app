@@ -55,7 +55,7 @@ st.sidebar.header("⚙️ Depot-Parameter")
 cash_balance = st.sidebar.number_input("Cash-Bestand (€)", value=25000.0, step=1000.0)
 target_stock_quote_max = st.sidebar.slider("Max. Ziel-Aktienquote (%)", 10.0, 100.0, 50.0)
 limit_pct_input = st.sidebar.slider("Max. Einzelposition (% vom Depot)", 1.0, 20.0, 5.0)
-sector_limit_pct_input = st.sidebar.slider("Max. Sektor-Limit (% vom Depot)", 5.0, 50.0, 25.0)
+sector_limit_pct_input = st.sidebar.slider("Max. Sektor-Limit (% vom Gesamtdepot)", 5.0, 50.0, 25.0)
 
 total_portfolio_value = total_stock_value + cash_balance
 
@@ -112,7 +112,7 @@ with tab_c:
     existing_pos_val = df_portfolio[df_portfolio["Ticker"] == sim_ticker]["Position_Value"].sum()
     existing_sector_val = df_portfolio[df_portfolio["Sector"] == sim_data["Sector"]]["Position_Value"].sum()
     
-    # After simulation
+    # After simulation calculations
     new_total_portfolio = total_portfolio_value + sim_amount
     new_total_stock = total_stock_value + sim_amount
     new_pos_val = existing_pos_val + sim_amount
@@ -124,10 +124,10 @@ with tab_c:
     sector_weight_before = (existing_sector_val / total_portfolio_value) * 100
     new_sector_weight = (new_sector_val / new_total_portfolio) * 100
     
-    # Core metric: Sector weight within equities only
+    # Core Metric: Sector share within equities only
     sector_share_equities_after = (new_sector_val / new_total_stock) * 100
     
-    # Limits calculations (EUR)
+    # Hard Limits calculations (in EUR based on total portfolio value)
     max_pos_eur = total_portfolio_value * (limit_pct_input / 100.0)
     max_sector_eur = total_portfolio_value * (sector_limit_pct_input / 100.0)
     max_target_eur = total_portfolio_value * (target_stock_quote_max / 100.0)
@@ -139,12 +139,8 @@ with tab_c:
     )
 
     # =========================================================
-    # DROSSEL-, TRANCHEN- UND KONZENTRATIONSLOGIK
+    # VERFEINERTE 4-STUFEN KONZENTRATIONSLOGIK (AKTIENPORTFOLIO)
     # =========================================================
-    STANDARD_TRANCHE_EUR = 1000.0
-    SOFT_CONCENTRATION_WARN = 40.0  # Ab 40% Aktienanteil reduzierte Tranche
-    SOFT_CONCENTRATION_STOP = 75.0  # Ab 75% Aktienanteil Drossel / Folgekauf-Stopp
-
     raw_hard_limit_space = min(
         max_pos_eur - existing_pos_val,
         max_sector_eur - existing_sector_val,
@@ -152,53 +148,86 @@ with tab_c:
     )
     raw_hard_limit_space = max(0.0, raw_hard_limit_space)
 
-    # Differenzierte Tranchen-Bewertung
-    if sector_share_equities_after > SOFT_CONCENTRATION_STOP:
-        max_recommended_buy = min(STANDARD_TRANCHE_EUR, raw_hard_limit_space)
-        is_drossel_active = True
-        
-        if sim_amount > max_recommended_buy:
-            tranche_status = "🔴 VOLUMEN ZU HOCH"
-            drossel_reason = f"Geplanter Kauf ({sim_amount:,.0f} €) übersteigt die maximal erlaubte Erst-Tranche von {max_recommended_buy:,.0f} €. Sektor `{sim_data['Sector']}` dominiert das Aktienportfolio ({sector_share_equities_after:.1f} %)."
-        else:
-            tranche_status = "🟠 ERST-TRANCHE FREIGEGEBEN"
-            drossel_reason = f"Erlaubt ist **ausschließlich eine Erst-Tranche von max. {max_recommended_buy:,.0f} €**. Weitere Nachkäufe in `{sim_data['Sector']}` sind blockiert, bis andere Sektoren ausgebaut wurden."
+    sec_share = sector_share_equities_after
 
-    elif sector_share_equities_after > SOFT_CONCENTRATION_WARN:
+    if sec_share > 50.0:
+        # STUFE 4: > 50% -> STRATEGISCHE SEKTOR-SPERRE
+        max_recommended_buy = 0.0
+        is_drossel_active = True
+        tranche_status = "🔴 SEKTOR-SPERRE"
+        drossel_headline = "🔴 SEKTOR-SPERRE"
+        drossel_reason = (
+            f"Sektor `{sim_data['Sector']}` macht **{sec_share:.1f} %** deines Aktienportfolios aus (> 50 %-Schwelle). "
+            f"Weitere Nachkäufe sind vollständig blockiert, bis andere Sektoren ausgebaut wurden."
+        )
+
+    elif sec_share >= 40.0:
+        # STUFE 3: 40 - 50% -> GEDROSSELTE ERST-TRANCHE (z.B. AXA mit 40,2 %)
+        max_recommended_buy = min(1000.0, raw_hard_limit_space)
+        is_drossel_active = True
+        tranche_status = "🟠 GEDROSSELTE TRANCHE"
+        drossel_headline = f"🟠 KAUF MÖGLICH – GEDROSSELTE ERST-TRANCHE (MAX. {max_recommended_buy:,.0f} €)"
+        drossel_reason = (
+            f"Sektor `{sim_data['Sector']}` stellt **{sec_share:.1f} %** deines Aktienportfolios (Schwelle: 40–50 %). "
+            f"Ein Einstieg ist nur als **gedrosselte Erst-Tranche (max. {max_recommended_buy:,.0f} €)** gestattet. "
+            f"Folgekäufe erst nach Diversifikation."
+        )
+
+    elif sec_share >= 30.0:
+        # STUFE 2: 30 - 40% -> NORMALE ERST-TRANCHE MIT HINWEIS
         max_recommended_buy = min(1500.0, raw_hard_limit_space)
         is_drossel_active = True
-        tranche_status = "🟡 GEDROSSELTE TRANCHE"
-        drossel_reason = f"Sektor-Konzentration erhöht ({sector_share_equities_after:.1f} % des Aktienanteils). Kauf auf max. {max_recommended_buy:,.0f} € drosseln."
+        tranche_status = "🟡 ERST-TRANCHE"
+        drossel_headline = "🟡 KAUF MÖGLICH – ERST-TRANCHE BEACHTEN"
+        drossel_reason = (
+            f"Sektor `{sim_data['Sector']}` erreicht **{sec_share:.1f} %** des Aktienportfolios (Schwelle: 30–40 %). "
+            f"Empfohlene Erst-Tranche: max. {max_recommended_buy:,.0f} €."
+        )
+
     else:
+        # STUFE 1: < 30% -> NORMALER KAUF
         max_recommended_buy = raw_hard_limit_space
         is_drossel_active = False
-        tranche_status = "🟢 NORMAL"
-        drossel_reason = "Gute Sektor-Diversifikation im Aktienanteil."
+        tranche_status = "🟢 UNBESCHRÄNKT"
+        drossel_headline = "🟢 NORMAL KAUFEN"
+        drossel_reason = f"Sektor `{sim_data['Sector']}` ist mit **{sec_share:.1f} %** am Aktienportfolio optimal diversifiziert (< 30 %)."
 
-    # Dashboard Metrics Display
+    # =========================================================
+    # UI METRICS DISPLAY
+    # =========================================================
     st.divider()
     st.markdown(f"### Simulation: Kauf von **{sim_amount:,.2f} €** in `{sim_data['Ticker']}` ({sim_data['Name']})")
     st.caption(f"Sektor: **{sim_data['Sector']}**")
     
     s1, s2, s3, s4 = st.columns(4)
-    s1.metric("Gesamte Aktienquote", f"{quote_before:.1f} % ➔ {quote_after:.1f} %", delta=f"Ziel: {target_stock_quote_max}%")
-    s2.metric("Positionsgewicht", f"{new_pos_weight:.1f} %", delta=f"Max: {limit_pct_input:.1f}%")
-    s3.metric("Sektor am Gesamtdepot", f"{sector_weight_before:.1f} % ➔ {new_sector_weight:.1f} %", delta=f"Max: {sector_limit_pct_input:.1f}%")
-    s4.metric("Empfohlene Tranche", f"Max. {max_recommended_buy:,.0f} €", delta=tranche_status, delta_color="inverse" if is_drossel_active else "normal")
+    s1.metric("Gesamte Aktienquote", f"{quote_before:.1f} % ➔ {quote_after:.1f} %", delta=f"Ziel-Max: {target_stock_quote_max}%")
+    s2.metric("Positionsgewicht (Depot)", f"{new_pos_weight:.1f} %", delta=f"Max: {limit_pct_input:.1f}%")
+    s3.metric("Sektor am Aktienanteil", f"{sec_share:.1f} %", delta="Schwelle: 40 %", delta_color="inverse" if sec_share >= 40 else "normal")
+    s4.metric(
+        "Max. Erst-Tranche", 
+        f"{max_recommended_buy:,.0f} €", 
+        delta=tranche_status, 
+        delta_color="inverse" if is_drossel_active else "normal",
+        help="Maximale Erst-Tranche unter den aktuellen Depotbedingungen zur Wahrung der Kapital-Disziplin."
+    )
 
     # =========================================================
-    # NEUES ENDURTEIL MIT EXPLIZITER TRANCHEN-STEUERUNG
+    # DECISION DISPLAY (ENDURTEIL)
     # =========================================================
     if not hard_limit_ok or "🔴 Daten-/Modellwarnung" in sim_data["Plausibility_Status"] or sim_data["raw_mos"] <= 0 or sim_amount > (max_recommended_buy + 0.01):
         if sim_amount > max_recommended_buy and hard_limit_ok and sim_data["raw_mos"] > 0:
-            st.error(f"### 🔴 KAUFVOLUMEN BLOCKIERT\nℹ️ **Tranchen-Limit überschritten:** Geplante Summe ({sim_amount:,.2f} €) liegt über dem Sektor-Cap.  \n👉 **Maximal zulässig:** **{max_recommended_buy:,.2f} €** als Erst-Tranche.")
+            st.error(
+                f"### 🔴 KAUFVOLUMEN BLOCKIERT\n"
+                f"ℹ️ **Geplante Kaufsumme ({sim_amount:,.2f} €) überschreitet das Tranchen-Cap.**  \n"
+                f"👉 **Max. erlaubte Erst-Tranche:** **{max_recommended_buy:,.2f} €** unter den aktuellen Sektorgewichtungen."
+            )
         else:
             st.error("### 🔴 KEIN KAUF / WARTEN\nℹ️ **Grund:** Hard Limit gerissen, Qualität unzureichend (<50) oder Bewertung ohne Puffer.")
     
     elif is_drossel_active:
-        st.warning(f"### 🟠 KAUF MÖGLICH – NUR ERST-TRANCHE (MAX. {max_recommended_buy:,.0f} €)\nℹ️ **Kapital-Disziplin:** Aktie ist fundamental stark, aber `{sim_data['Sector']}` stellt {sector_share_equities_after:.1f} % deines Aktienportfolios.  \n👉 **Handlungsanweisung:** 1.000 € Erst-Tranche möglich. **Weitere Nachkäufe erst nach Aufbau anderer Sektoren.**")
+        st.warning(f"### {drossel_headline}\nℹ️ **Kapital-Disziplin:** {drossel_reason}")
     
     elif "🟡" in sim_data["Plausibility_Status"]:
         st.warning("### 🟡 KAUF MÖGLICH\nℹ️ **Hinweis:** Kauf ist möglich, leichte Modell- / Sektorhinweise beachten.")
     else:
-        st.success("### 🟢 NORMAL KAUFEN\nℹ️ **Optimal:** Alle Kennzahlen grün, hervorragende Depot-Integration und saubere Streuung.")
+        st.success(f"### {drossel_headline}\nℹ️ **Optimal:** Alle Kennzahlen grün, hervorragende Depot-Integration.")
