@@ -426,7 +426,7 @@ with tab_c:
             new_sector_weight = (new_sector_val / depot_val_input) * 100
             sector_share_equities_after = (new_sector_val / total_stock_val_after * 100) if total_stock_val_after > 0 else 0.0
             
-            # Freie Spielräume
+            # Freie Spielräume (Hard Limits)
             max_target_eur = (target_stock_quote_max / 100.0) * depot_val_input
             spielraum_quote_after = max(0.0, max_target_eur - total_stock_val_after)
             
@@ -435,6 +435,20 @@ with tab_c:
             
             max_sector_eur = (sector_limit_pct_input / 100.0) * depot_val_input
             spielraum_sector_after = max(0.0, max_sector_eur - new_sector_val)
+
+            # BERECHNUNG DER MAXIMAL EMPFOHLENEN KAUFGRÖSSE (DROSSEL-LOGIK)
+            raw_max_allowed_buy = min(
+                max_pos_eur - existing_pos_val,
+                max_sector_eur - existing_sector_val,
+                max_target_eur - total_stock_val_before
+            )
+            raw_max_allowed_buy = max(0.0, raw_max_allowed_buy)
+
+            high_concentration = sector_share_equities_after > 60.0
+            
+            # Bei hoher Sektor-Konzentration halbiert die Engine den empfohlenen Kaufbetrag
+            drossel_faktor = 0.5 if high_concentration else 1.0
+            max_recommended_buy = raw_max_allowed_buy * drossel_faktor
             
             st.divider()
             st.markdown(f"### Simulation: Kauf von **{sim_amount:,.2f} €** in `{sim_data['Ticker']}` ({sim_data['Name']})")
@@ -444,7 +458,7 @@ with tab_c:
             s1.metric("Gesamte Aktienquote", f"{quote_before:.1f} % ➔ {quote_after:.1f} %", delta=f"Ziel: {target_stock_quote_max}%")
             s2.metric("Positionsgewicht", f"{new_pos_weight:.1f} %", delta=f"Max: {limit_pct_input:.1f}%")
             s3.metric(f"Sektor am Gesamtdepot", f"{sector_weight_before:.1f} % ➔ {new_sector_weight:.1f} %", delta=f"Max: {sector_limit_pct_input:.1f}%")
-            s4.metric("Verbl. Quoten-Spielraum", f"{spielraum_quote_after:,.2f} €")
+            s4.metric("Max. Empf. Kaufgröße", f"{max_recommended_buy:,.2f} €", delta="Gedrosselt (50%)" if high_concentration else "Normal")
 
             st.divider()
             st.markdown("#### 🎯 8-Punkte-Checkliste (Portfolio Fit)")
@@ -475,12 +489,10 @@ with tab_c:
             check_sec = f"{c_sec} **5. Sektorgewicht (am Gesamtdepot):** {new_sector_weight:.1f} % (Limit: {sector_limit_pct_input:.1f} % | Spielraum: {spielraum_sector_after:,.2f} €)"
             if new_sector_weight > sector_limit_pct_input: hard_limit_ok = False
 
-            # 6. Sektor-Konzentration (ERWEITERTE VORHER-NACHHER METRIK)
-            high_concentration = False
-            if sector_share_equities_after > 60.0:
+            # 6. Sektor-Konzentration (KLUMPENRISIKO)
+            if high_concentration:
                 c_conc = "🔴"
                 rating_str = "Hohe Konzentration innerhalb des Aktienanteils"
-                high_concentration = True
             elif sector_share_equities_after > 35.0:
                 c_conc = "🟡"
                 rating_str = "Moderate Konzentration innerhalb des Aktienanteils"
@@ -492,7 +504,7 @@ with tab_c:
             all_holdings = list(set(existing_sector_tickers + [sim_data['Ticker']]))
             holdings_after_str = " + ".join(all_holdings)
 
-            discipline_note = f"\n⚠️ **Kapital-Disziplin:** Kein weiterer Nachkauf im Sektor `{sim_data['Sector']}` empfohlen, solange der Aktienanteil nicht durch andere Sektoren breiter diversifiziert ist." if high_concentration else ""
+            discipline_note = f"\n⚠️ **Kapital-Disziplin:** Reduzierte Kaufgröße empfohlen (**max. {max_recommended_buy:,.2f} €** statt geplanter {sim_amount:,.2f} €). Weiterer Nachkauf im Sektor `{sim_data['Sector']}` erst nach breiterer Aktien-Diversifikation." if high_concentration else ""
 
             check_sim = f"""{c_conc} **6. Sektor-Konzentration ({sim_data['Sector']}):**
 - **Vor Kauf:** {sector_weight_before:.1f} % des Gesamtdepots / {sector_share_equities_before:.1f} % der Aktien ({holdings_before_str})
@@ -509,16 +521,16 @@ with tab_c:
             check_conf = f"{c_conf} **8. Modellrisiko & Confidence:** Level {sim_data['Confidence']} ({sim_data['Plausibility_Status']})"
 
             # =========================================================
-            # ENDURTEIL (5 STUFEN RISIKOMANAGEMENT)
+            # NEUES ENDURTEIL (SAUBERE 4-STUFEN-DIFFERENZIERUNG)
             # =========================================================
-            if not hard_limit_ok or "🔴 Daten-/Modellwarnung" in sim_data["Plausibility_Status"]:
-                st.error("### 🔴 KEIN KAUF EMPFOHLEN (Limit-Überschreitung oder negatives Modell-Signal)")
-            elif high_concentration:
-                st.warning(f"### 🟠 KAUF MÖGLICH – GEDROSSELT / KONZENTRATION BEACHTEN\nℹ️ **Hinweis:** Aktie fundamental attraktiv, aber der Sektor `{sim_data['Sector']}` würde nach Kauf **{sector_share_equities_after:.1f} %** deines Aktienportfolios ausmachen.")
+            if not hard_limit_ok or "🔴 Daten-/Modellwarnung" in sim_data["Plausibility_Status"] or sim_data["raw_mos"] <= 0:
+                st.error("### 🔴 KEIN KAUF\nℹ️ **Grund:** Hard Limit gerissen, Qualität zu schwach (<50) oder Bewertung unzureichend.")
+            elif high_concentration or sim_amount > max_recommended_buy:
+                st.warning(f"### 🟠 KAUF GEDROSSELT\nℹ️ **Empfehlungs-Anpassung:** Aktie fundamental sehr attraktiv, aber Sektor-Klumpenrisiko im Aktienanteil ist hoch ({sector_share_equities_after:.1f} %).  \n👉 **Empfohlene Kaufgröße:** Max. **{max_recommended_buy:,.2f} €** (statt {sim_amount:,.2f} €).")
             elif "🟡" in sim_data["Plausibility_Status"] or new_sector_weight > (sector_limit_pct_input * 0.8) or sector_share_equities_after > 35.0:
-                st.warning("### 🟡 KAUF MÖGLICH – MODELL / SEKTOR MIT VORSICHT PRÜFEN")
+                st.warning("### 🟡 KAUF MÖGLICH\nℹ️ **Hinweis:** Kauf ist möglich, leichte Nebenbedingungen oder Modellhinweise beachten.")
             else:
-                st.success("### 🟢 KAUF PASST OPTIMAL INS DEPOT")
+                st.success("### 🟢 KAUFEN\nℹ️ **Optimal:** Alle Kennzahlen grün, hervorragende Depot-Integration.")
 
             # Prüfpunkte untereinander ausgeben
             cols_check1, cols_check2 = st.columns(2)
