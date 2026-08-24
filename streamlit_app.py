@@ -7,18 +7,19 @@ from datetime import datetime
 # =========================================================
 
 st.set_page_config(
-    page_title="Stock Valuation & Portfolio Engine",
+    page_title="Aktien Fair Value & Depot",
     page_icon="📈",
     layout="wide"
 )
 
-st.title("📈 Stock Valuation & Portfolio Capacity Engine")
+st.title("📈 Aktien Fair Value & Portfolio Engine")
 
 # =========================================================
-# BEISPIEL-AKTIEN / FUNDAMENTALDATEN
+# BEISPIEL-AKTIEN
 # =========================================================
 
 UNIVERSE = {
+
     "AXA": {
         "name": "AXA SA",
         "sector": "Financial Services",
@@ -104,6 +105,7 @@ UNIVERSE = {
     },
 }
 
+
 # =========================================================
 # SESSION STATE
 # =========================================================
@@ -113,6 +115,26 @@ if "portfolio" not in st.session_state:
 
 if "transactions" not in st.session_state:
     st.session_state.transactions = []
+
+if "custom_stocks" not in st.session_state:
+    st.session_state.custom_stocks = {}
+
+
+# =========================================================
+# UNIVERSE ERWEITERN
+# =========================================================
+
+def get_universe():
+
+    complete_universe = {}
+
+    complete_universe.update(UNIVERSE)
+    complete_universe.update(
+        st.session_state.custom_stocks
+    )
+
+    return complete_universe
+
 
 # =========================================================
 # SIDEBAR
@@ -150,10 +172,21 @@ max_sector = st.sidebar.slider(
 
 st.sidebar.divider()
 
-if st.sidebar.button("🗑️ ALLES ZURÜCKSETZEN"):
+st.sidebar.info(
+    "💡 Aktien können unten im Bereich "
+    "'Eigene Aktie hinzufügen' manuell angelegt werden."
+)
+
+if st.sidebar.button(
+    "🗑️ ALLES ZURÜCKSETZEN"
+):
+
     st.session_state.portfolio = {}
-    st.session_state.transactions = []
+    st.session_state.transactions = {}
+    st.session_state.custom_stocks = {}
+
     st.rerun()
+
 
 # =========================================================
 # HILFSFUNKTIONEN
@@ -161,11 +194,13 @@ if st.sidebar.button("🗑️ ALLES ZURÜCKSETZEN"):
 
 def portfolio_dataframe():
 
+    universe = get_universe()
+
     rows = []
 
     for ticker, pos in st.session_state.portfolio.items():
 
-        current_price = UNIVERSE.get(
+        current_price = universe.get(
             ticker,
             {}
         ).get(
@@ -173,9 +208,15 @@ def portfolio_dataframe():
             pos["last_price"]
         )
 
-        current_value = pos["shares"] * current_price
+        current_value = (
+            pos["shares"] *
+            current_price
+        )
 
-        cost = pos["shares"] * pos["avg_price"]
+        cost = (
+            pos["shares"] *
+            pos["avg_price"]
+        )
 
         pnl = current_value - cost
 
@@ -186,15 +227,25 @@ def portfolio_dataframe():
         )
 
         rows.append({
+
             "Ticker": ticker,
+
             "Name": pos["name"],
+
             "Sektor": pos["sector"],
+
             "Stück": pos["shares"],
+
             "Ø Kaufkurs": pos["avg_price"],
+
             "Kurs": current_price,
+
             "Einstand": cost,
+
             "Wert": current_value,
+
             "G&V": pnl,
+
             "G&V %": pnl_pct,
         })
 
@@ -206,7 +257,7 @@ def total_stock_value():
     df = portfolio_dataframe()
 
     if df.empty:
-        return 0
+        return 0.0
 
     return df["Wert"].sum()
 
@@ -221,19 +272,30 @@ def stock_quote():
     total = total_depot_value()
 
     if total == 0:
-        return 0
+        return 0.0
 
-    return total_stock_value() / total * 100
+    return (
+        total_stock_value() /
+        total *
+        100
+    )
 
 
 def recommendation(ticker):
 
-    data = UNIVERSE[ticker]
+    universe = get_universe()
+
+    data = universe[ticker]
 
     price = data["price"]
+
     fair = data["fair_value"]
 
-    discount = (fair - price) / fair * 100
+    discount = (
+        (fair - price) /
+        fair *
+        100
+    )
 
     quality = data["quality"]
 
@@ -255,51 +317,103 @@ def recommendation(ticker):
     return "🟡 ABWARTEN"
 
 
-def buy_stock(ticker, shares, price):
+# =========================================================
+# KAUFEN
+# =========================================================
 
-    data = UNIVERSE[ticker]
+def buy_stock(
+    ticker,
+    shares,
+    price
+):
 
-    old = st.session_state.portfolio.get(ticker)
+    universe = get_universe()
+
+    data = universe[ticker]
+
+    amount = shares * price
+
+    old = st.session_state.portfolio.get(
+        ticker
+    )
 
     if old:
 
         old_shares = old["shares"]
+
         old_avg = old["avg_price"]
 
-        new_shares = old_shares + shares
+        new_shares = (
+            old_shares +
+            shares
+        )
 
         new_avg = (
-            (old_shares * old_avg) +
-            (shares * price)
+            (
+                old_shares *
+                old_avg
+            )
+            +
+            (
+                shares *
+                price
+            )
         ) / new_shares
 
         old["shares"] = new_shares
+
         old["avg_price"] = new_avg
+
         old["last_price"] = price
 
     else:
 
         st.session_state.portfolio[ticker] = {
+
             "name": data["name"],
+
             "sector": data["sector"],
+
             "shares": shares,
+
             "avg_price": price,
+
             "last_price": price,
         }
 
-    amount = shares * price
-
     st.session_state.transactions.append({
-        "Datum": datetime.now().strftime("%d.%m.%Y %H:%M"),
-        "Typ": "KAUF",
-        "Ticker": ticker,
-        "Stück": shares,
-        "Kurs": price,
-        "Betrag": amount,
+
+        "Datum":
+            datetime.now().strftime(
+                "%d.%m.%Y %H:%M"
+            ),
+
+        "Typ":
+            "KAUF",
+
+        "Ticker":
+            ticker,
+
+        "Stück":
+            shares,
+
+        "Kurs":
+            price,
+
+        "Betrag":
+            amount,
     })
 
 
-def sell_stock(ticker, shares, price):
+# =========================================================
+# VERKAUFEN
+# =========================================================
+
+def sell_stock(
+    ticker,
+    shares,
+    price
+):
 
     if ticker not in st.session_state.portfolio:
         return False
@@ -314,15 +428,30 @@ def sell_stock(ticker, shares, price):
     pos["shares"] -= shares
 
     st.session_state.transactions.append({
-        "Datum": datetime.now().strftime("%d.%m.%Y %H:%M"),
-        "Typ": "VERKAUF",
-        "Ticker": ticker,
-        "Stück": shares,
-        "Kurs": price,
-        "Betrag": amount,
+
+        "Datum":
+            datetime.now().strftime(
+                "%d.%m.%Y %H:%M"
+            ),
+
+        "Typ":
+            "VERKAUF",
+
+        "Ticker":
+            ticker,
+
+        "Stück":
+            shares,
+
+        "Kurs":
+            price,
+
+        "Betrag":
+            amount,
     })
 
     if pos["shares"] <= 0.000001:
+
         del st.session_state.portfolio[ticker]
 
     return True
@@ -332,12 +461,19 @@ def sell_stock(ticker, shares, price):
 # TABS
 # =========================================================
 
-tab_a, tab_b, tab_c, tab_d = st.tabs([
+tab_a, tab_b, tab_c, tab_d, tab_e = st.tabs([
+
     "🔍 Aktien-Analyse",
+
     "📊 Depot",
+
     "🎯 Kaufsimulation",
-    "🧾 Transaktionen"
+
+    "🧾 Transaktionen",
+
+    "➕ Aktie hinzufügen",
 ])
+
 
 # =========================================================
 # TAB A – AKTIENANALYSE
@@ -345,24 +481,42 @@ tab_a, tab_b, tab_c, tab_d = st.tabs([
 
 with tab_a:
 
-    st.header("🔍 Einzelaktien-Analyse")
-
-    ticker = st.selectbox(
-        "Aktie auswählen:",
-        list(UNIVERSE.keys())
+    st.header(
+        "🔍 Einzelaktien-Analyse"
     )
 
-    data = UNIVERSE[ticker]
+    universe = get_universe()
+
+    ticker = st.selectbox(
+
+        "Aktie auswählen:",
+
+        list(universe.keys()),
+
+        format_func=lambda x:
+            f"{x} – {universe[x]['name']}"
+    )
+
+    data = universe[ticker]
 
     price = data["price"]
+
     fair = data["fair_value"]
 
-    upside = (fair / price - 1) * 100
+    upside = (
+        fair /
+        price -
+        1
+    ) * 100
 
-    recommendation_text = recommendation(ticker)
+    recommendation_text = (
+        recommendation(ticker)
+    )
 
     st.subheader(
-        f"{data['name']} ({ticker})"
+
+        f"{data['name']} "
+        f"({ticker})"
     )
 
     c1, c2, c3, c4 = st.columns(4)
@@ -390,25 +544,27 @@ with tab_a:
 
     st.divider()
 
-    if "🟢 KAUFEN" in recommendation_text:
+    if "🟢" in recommendation_text:
+
         st.success(
             f"### {recommendation_text}"
         )
+
     elif "🔴" in recommendation_text:
+
         st.error(
             f"### {recommendation_text}"
         )
-    elif "🟡" in recommendation_text:
-        st.warning(
-            f"### {recommendation_text}"
-        )
+
     else:
-        st.info(
+
+        st.warning(
             f"### {recommendation_text}"
         )
 
     st.write(
-        f"**Sektor:** {data['sector']}"
+        f"**Sektor:** "
+        f"{data['sector']}"
     )
 
     st.write(
@@ -422,14 +578,18 @@ with tab_a:
     )
 
     st.write(
-        f"**Beta:** {data['beta']:.2f}"
+        f"**Beta:** "
+        f"{data['beta']:.2f}"
     )
 
     st.divider()
 
-    st.subheader("🎯 Bewertungszonen")
+    st.subheader(
+        "🎯 Bewertungszonen"
+    )
 
     buy_10 = fair * 0.90
+
     buy_20 = fair * 0.80
 
     z1, z2, z3 = st.columns(3)
@@ -449,18 +609,23 @@ with tab_a:
         f"{buy_20:.2f} €"
     )
 
+
 # =========================================================
 # TAB B – DEPOT
 # =========================================================
 
 with tab_b:
 
-    st.header("📊 Reales Depot")
+    st.header(
+        "📊 Mein Depot"
+    )
 
     df = portfolio_dataframe()
 
     total_value = total_depot_value()
+
     stocks = total_stock_value()
+
     quote = stock_quote()
 
     m1, m2, m3, m4 = st.columns(4)
@@ -487,15 +652,25 @@ with tab_b:
 
     st.divider()
 
-    # -----------------------------------------------------
+    # =====================================================
     # KAUF
-    # -----------------------------------------------------
+    # =====================================================
 
-    st.subheader("➕ Aktie kaufen")
+    st.subheader(
+        "➕ Aktie kaufen"
+    )
+
+    universe = get_universe()
 
     buy_ticker = st.selectbox(
+
         "Aktie",
-        list(UNIVERSE.keys()),
+
+        list(universe.keys()),
+
+        format_func=lambda x:
+            f"{x} – {universe[x]['name']}",
+
         key="buy_ticker"
     )
 
@@ -504,29 +679,45 @@ with tab_b:
     with buy_col1:
 
         buy_shares = st.number_input(
+
             "Stückzahl",
+
             min_value=0.01,
+
             value=10.0,
+
             step=1.0,
+
             key="buy_shares"
         )
 
     with buy_col2:
 
         buy_price = st.number_input(
+
             "Kaufkurs (€)",
+
             min_value=0.01,
+
             value=float(
-                UNIVERSE[buy_ticker]["price"]
+                universe[
+                    buy_ticker
+                ]["price"]
             ),
+
             step=0.01,
+
             key="buy_price"
         )
 
-    buy_amount = buy_shares * buy_price
+    buy_amount = (
+        buy_shares *
+        buy_price
+    )
 
     st.info(
-        f"Kaufwert: **{buy_amount:,.2f} €**"
+        f"Kaufwert: "
+        f"**{buy_amount:,.2f} €**"
     )
 
     if st.button(
@@ -549,6 +740,7 @@ with tab_b:
             )
 
             st.success(
+
                 f"✅ {buy_shares:g} Stück "
                 f"{buy_ticker} gekauft."
             )
@@ -557,11 +749,13 @@ with tab_b:
 
     st.divider()
 
-    # -----------------------------------------------------
+    # =====================================================
     # VERKAUF
-    # -----------------------------------------------------
+    # =====================================================
 
-    st.subheader("➖ Aktie verkaufen")
+    st.subheader(
+        "➖ Aktie verkaufen"
+    )
 
     if df.empty:
 
@@ -572,55 +766,83 @@ with tab_b:
     else:
 
         sell_ticker = st.selectbox(
+
             "Position auswählen",
+
             df["Ticker"].tolist(),
+
+            format_func=lambda x:
+                f"{x} – "
+                f"{st.session_state.portfolio[x]['name']}",
+
             key="sell_ticker"
         )
 
-        current_pos = st.session_state.portfolio[
-            sell_ticker
-        ]
+        current_pos = (
+            st.session_state.portfolio[
+                sell_ticker
+            ]
+        )
 
         s_col1, s_col2 = st.columns(2)
 
         with s_col1:
 
             sell_shares = st.number_input(
+
                 "Zu verkaufende Stückzahl",
+
                 min_value=0.01,
+
                 max_value=float(
                     current_pos["shares"]
                 ),
+
                 value=min(
                     1.0,
-                    float(current_pos["shares"])
+                    float(
+                        current_pos["shares"]
+                    )
                 ),
+
                 step=1.0,
+
                 key="sell_shares"
             )
 
         with s_col2:
 
             sell_price = st.number_input(
+
                 "Verkaufskurs (€)",
+
                 min_value=0.01,
+
                 value=float(
-                    UNIVERSE.get(
+                    universe.get(
                         sell_ticker,
                         {}
                     ).get(
                         "price",
-                        current_pos["last_price"]
+                        current_pos[
+                            "last_price"
+                        ]
                     )
                 ),
+
                 step=0.01,
+
                 key="sell_price"
             )
 
-        sell_amount = sell_shares * sell_price
+        sell_amount = (
+            sell_shares *
+            sell_price
+        )
 
         st.info(
-            f"Verkaufswert: **{sell_amount:,.2f} €**"
+            f"Verkaufswert: "
+            f"**{sell_amount:,.2f} €**"
         )
 
         vc1, vc2 = st.columns(2)
@@ -659,7 +881,8 @@ with tab_b:
                 ):
 
                     st.success(
-                        f"✅ Position {sell_ticker} "
+                        f"✅ Position "
+                        f"{sell_ticker} "
                         f"komplett verkauft."
                     )
 
@@ -667,11 +890,13 @@ with tab_b:
 
     st.divider()
 
-    # -----------------------------------------------------
+    # =====================================================
     # DEPOTÜBERSICHT
-    # -----------------------------------------------------
+    # =====================================================
 
-    st.subheader("📋 Depotübersicht")
+    st.subheader(
+        "📋 Depotübersicht"
+    )
 
     if df.empty:
 
@@ -681,13 +906,15 @@ with tab_b:
 
     else:
 
-        display_df = df.copy()
-
         st.dataframe(
-            display_df,
+
+            df,
+
             use_container_width=True,
+
             hide_index=True
         )
+
 
 # =========================================================
 # TAB C – KAUFSIMULATION
@@ -699,23 +926,42 @@ with tab_c:
         "🎯 Kaufsimulation & Portfolio Fit"
     )
 
+    universe = get_universe()
+
     sim_ticker = st.selectbox(
+
         "Aktie simulieren:",
-        list(UNIVERSE.keys()),
+
+        list(universe.keys()),
+
+        format_func=lambda x:
+            f"{x} – {universe[x]['name']}",
+
         key="sim_ticker"
     )
 
     sim_amount = st.number_input(
+
         "Geplante Kaufsumme (€)",
+
         min_value=0.0,
+
         value=1000.0,
+
         step=250.0
     )
 
-    sim_data = UNIVERSE[sim_ticker]
+    sim_data = universe[
+        sim_ticker
+    ]
 
-    current_stock_value = total_stock_value()
-    current_total = total_depot_value()
+    current_stock_value = (
+        total_stock_value()
+    )
+
+    current_total = (
+        total_depot_value()
+    )
 
     new_stock_value = (
         current_stock_value +
@@ -728,20 +974,27 @@ with tab_c:
     )
 
     new_quote = (
+
         new_stock_value /
         new_total *
         100
+
         if new_total > 0
+
         else 0
     )
 
     existing_position = 0
 
-    if sim_ticker in st.session_state.portfolio:
+    if sim_ticker in (
+        st.session_state.portfolio
+    ):
 
-        pos = st.session_state.portfolio[
-            sim_ticker
-        ]
+        pos = (
+            st.session_state.portfolio[
+                sim_ticker
+            ]
+        )
 
         existing_position = (
             pos["shares"] *
@@ -754,24 +1007,37 @@ with tab_c:
     )
 
     position_weight = (
+
         new_position /
         new_total *
         100
+
         if new_total > 0
+
         else 0
     )
 
-    # Sektor
+    # =====================================================
+    # SEKTOR
+    # =====================================================
 
     sector_value = 0
 
-    for ticker_key, pos in st.session_state.portfolio.items():
+    for ticker_key, pos in (
+        st.session_state.portfolio.items()
+    ):
 
-        if pos["sector"] == sim_data["sector"]:
+        if (
+            pos["sector"]
+            ==
+            sim_data["sector"]
+        ):
 
             sector_value += (
+
                 pos["shares"] *
-                UNIVERSE.get(
+
+                universe.get(
                     ticker_key,
                     {}
                 ).get(
@@ -780,112 +1046,139 @@ with tab_c:
                 )
             )
 
-    new_sector_value = sector_value + sim_amount
+    new_sector_value = (
+        sector_value +
+        sim_amount
+    )
 
     sector_weight_depot = (
+
         new_sector_value /
         new_total *
         100
+
         if new_total > 0
+
         else 0
     )
 
     stocks_after = new_stock_value
 
     sector_weight_stocks = (
+
         new_sector_value /
         stocks_after *
         100
+
         if stocks_after > 0
+
         else 0
     )
 
     c1, c2, c3, c4 = st.columns(4)
 
     c1.metric(
+
         "Aktienquote",
-        f"{stock_quote():.1f}% ➜ {new_quote:.1f}%"
+
+        f"{stock_quote():.1f}% "
+        f"➜ {new_quote:.1f}%"
     )
 
     c2.metric(
+
         "Positionsgewicht",
+
         f"{position_weight:.1f}%"
     )
 
     c3.metric(
+
         "Sektor / Depot",
+
         f"{sector_weight_depot:.1f}%"
     )
 
     c4.metric(
+
         "Sektor / Aktien",
+
         f"{sector_weight_stocks:.1f}%"
     )
 
     st.divider()
 
-    # -----------------------------------------------------
+    # =====================================================
     # TRANCHENLOGIK
-    # -----------------------------------------------------
+    # =====================================================
 
     if new_quote > max_stock_quote:
 
-        status = "🔴 WARTEN"
         max_buy = 0
 
         st.error(
-            "🔴 Kauf würde deine maximale Aktienquote überschreiten."
+
+            "🔴 Kauf würde deine maximale "
+            "Aktienquote überschreiten."
         )
 
     elif position_weight > max_position:
 
-        status = "🟠 GEDROSSELT"
         max_buy = 0
 
         st.warning(
-            "🟠 Kauf würde die maximale Einzelposition überschreiten."
+
+            "🟠 Kauf würde die maximale "
+            "Einzelposition überschreiten."
         )
 
     elif sector_weight_depot > max_sector:
 
-        status = "🟠 GEDROSSELT"
         max_buy = 0
 
         st.warning(
-            "🟠 Kauf würde das Sektorlimit überschreiten."
+
+            "🟠 Kauf würde das Sektorlimit "
+            "überschreiten."
         )
 
     elif sector_weight_stocks >= 50:
 
-        status = "🟠 ERST-TRANCHE"
         max_buy = min(
             sim_amount,
             1000
         )
 
         st.warning(
-            "🟠 Sektor bereits stark im Aktienanteil vertreten. "
+
+            "🟠 Sektor bereits stark im "
+            "Aktienanteil vertreten. "
             "Nur kleine Erst-Tranche."
         )
 
     else:
 
-        status = "🟢 KAUF MÖGLICH"
         max_buy = sim_amount
 
         st.success(
-            "🟢 Kauf passt zu den aktuellen Depotlimits."
+
+            "🟢 Kauf passt zu den "
+            "aktuellen Depotlimits."
         )
 
     st.metric(
+
         "Empfohlene Kaufgröße",
+
         f"{max_buy:,.0f} €"
     )
 
     st.write(
+
         f"**Fundamentales Urteil:** "
         f"{recommendation(sim_ticker)}"
     )
+
 
 # =========================================================
 # TAB D – TRANSAKTIONEN
@@ -893,46 +1186,339 @@ with tab_c:
 
 with tab_d:
 
-    st.header("🧾 Transaktionshistorie")
+    st.header(
+        "🧾 Transaktionshistorie"
+    )
 
-    if len(st.session_state.transactions) == 0:
+    if (
+        len(
+            st.session_state.transactions
+        )
+        == 0
+    ):
 
         st.info(
-            "Noch keine Käufe oder Verkäufe gespeichert."
+            "Noch keine Käufe oder "
+            "Verkäufe gespeichert."
         )
 
     else:
 
         trans_df = pd.DataFrame(
+
             st.session_state.transactions
         )
 
         st.dataframe(
+
             trans_df,
+
             use_container_width=True,
+
             hide_index=True
         )
 
         st.divider()
 
-        total_buys = trans_df.loc[
-            trans_df["Typ"] == "KAUF",
-            "Betrag"
-        ].sum()
+        total_buys = (
+            trans_df.loc[
+                trans_df["Typ"]
+                ==
+                "KAUF",
+                "Betrag"
+            ].sum()
+        )
 
-        total_sales = trans_df.loc[
-            trans_df["Typ"] == "VERKAUF",
-            "Betrag"
-        ].sum()
+        total_sales = (
+            trans_df.loc[
+                trans_df["Typ"]
+                ==
+                "VERKAUF",
+                "Betrag"
+            ].sum()
+        )
 
         c1, c2 = st.columns(2)
 
         c1.metric(
+
             "Käufe gesamt",
+
             f"{total_buys:,.2f} €"
         )
 
         c2.metric(
+
             "Verkäufe gesamt",
+
             f"{total_sales:,.2f} €"
         )
+
+
+# =========================================================
+# TAB E – EIGENE AKTIE HINZUFÜGEN
+# =========================================================
+
+with tab_e:
+
+    st.header(
+        "➕ Eigene Aktie hinzufügen"
+    )
+
+    st.info(
+
+        "Hier kannst du jede Aktie manuell "
+        "in deine App aufnehmen."
+    )
+
+    with st.form(
+        "add_stock_form"
+    ):
+
+        custom_ticker = st.text_input(
+
+            "Ticker / Kürzel",
+
+            placeholder="z.B. AVGO, MRK, BASF.DE"
+        ).strip().upper()
+
+        custom_name = st.text_input(
+
+            "Name der Aktie",
+
+            placeholder="z.B. Broadcom Inc."
+        ).strip()
+
+        custom_sector = st.text_input(
+
+            "Sektor",
+
+            placeholder="z.B. Technology"
+        ).strip()
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+
+            custom_price = st.number_input(
+
+                "Aktueller Kurs (€)",
+
+                min_value=0.01,
+
+                value=100.00,
+
+                step=0.01
+            )
+
+        with col2:
+
+            custom_fair = st.number_input(
+
+                "Fair Value (€)",
+
+                min_value=0.01,
+
+                value=120.00,
+
+                step=0.01
+            )
+
+        col3, col4 = st.columns(2)
+
+        with col3:
+
+            custom_quality = st.number_input(
+
+                "Quality Score",
+
+                min_value=0,
+
+                max_value=100,
+
+                value=80,
+
+                step=1
+            )
+
+        with col4:
+
+            custom_per = st.number_input(
+
+                "KGV",
+
+                min_value=0.0,
+
+                value=15.0,
+
+                step=0.1
+            )
+
+        col5, col6 = st.columns(2)
+
+        with col5:
+
+            custom_beta = st.number_input(
+
+                "Beta",
+
+                min_value=0.0,
+
+                value=1.0,
+
+                step=0.01
+            )
+
+        with col6:
+
+            custom_return = st.number_input(
+
+                "Rendite 3 Jahre (% p.a.)",
+
+                min_value=-100.0,
+
+                value=10.0,
+
+                step=0.1
+            )
+
+        custom_reval = st.number_input(
+
+            "Davon Neubewertung (% p.a.)",
+
+            min_value=-100.0,
+
+            value=3.0,
+
+            step=0.1
+        )
+
+        submitted = st.form_submit_button(
+
+            "💾 AKTIE SPEICHERN"
+        )
+
+    if submitted:
+
+        if not custom_ticker:
+
+            st.error(
+                "❌ Bitte einen Ticker eingeben."
+            )
+
+        elif not custom_name:
+
+            st.error(
+                "❌ Bitte den Aktiennamen eingeben."
+            )
+
+        elif not custom_sector:
+
+            st.error(
+                "❌ Bitte einen Sektor eingeben."
+            )
+
+        else:
+
+            st.session_state.custom_stocks[
+                custom_ticker
+            ] = {
+
+                "name":
+                    custom_name,
+
+                "sector":
+                    custom_sector,
+
+                "price":
+                    custom_price,
+
+                "fair_value":
+                    custom_fair,
+
+                "quality":
+                    custom_quality,
+
+                "per":
+                    custom_per,
+
+                "beta":
+                    custom_beta,
+
+                "return_3y":
+                    custom_return,
+
+                "reval_share":
+                    custom_reval,
+            }
+
+            st.success(
+
+                f"✅ {custom_name} "
+                f"({custom_ticker}) "
+                f"wurde gespeichert."
+            )
+
+            st.info(
+
+                "Die Aktie steht jetzt "
+                "in der Aktienanalyse, "
+                "im Depot und in der "
+                "Kaufsimulation zur Verfügung."
+            )
+
+            st.rerun()
+
+    st.divider()
+
+    st.subheader(
+        "📋 Meine zusätzlich angelegten Aktien"
+    )
+
+    if not st.session_state.custom_stocks:
+
+        st.info(
+            "Noch keine eigenen Aktien angelegt."
+        )
+
+    else:
+
+        custom_rows = []
+
+        for ticker, data in (
+            st.session_state.custom_stocks.items()
+        ):
+
+            custom_rows.append({
+
+                "Ticker":
+                    ticker,
+
+                "Name":
+                    data["name"],
+
+                "Sektor":
+                    data["sector"],
+
+                "Kurs":
+                    data["price"],
+
+                "Fair Value":
+                    data["fair_value"],
+
+                "Quality":
+                    data["quality"],
+            })
+
+        custom_df = pd.DataFrame(
+            custom_rows
+        )
+
+        st.dataframe(
+
+            custom_df,
+
+            use_container_width=True,
+
+            hide_index=True
+    )
